@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 from ..settings import Settings
 from .._core.messenger import Messenger
-from .._core.tools import wait_until
+from .._core.tools import normalize_url, wait_until
 from .._elements.element import Element, ShadowRoot, run_js, _find_by_perform_search, _find_by_query
 from .._functions.cookies import CookiesList
 from .._functions.web import NavResult, save_page, location_in_viewport_js
@@ -446,6 +446,8 @@ class PageBase(Messenger):
             if p.exists():
                 url = str(p.resolve())
                 is_file = True
+        if not is_file:  # 缺协议自动补（www.baidu.com → https://…，localhost:8080 → http://…）
+            url = normalize_url(url)
         self._url = url if is_file else quote(url, safe='-_.~!*\'"();:@&=+$,/\\?#[]%')
         retry = retry if retry is not None else self.retry_times
         interval = interval if interval is not None else self.retry_interval

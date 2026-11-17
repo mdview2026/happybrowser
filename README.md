@@ -56,12 +56,14 @@ frame.ele('#inside').text
 
 ```bat
 hb open https://example.com          & rem 打开页面（--new 新开标签页）
+hb open www.baidu.com                & rem 缺协议自动补：裸域名 → https，localhost/IP → http
 hb find "#kw"                        & rem DSL 定位，输出 @1/@2… 引用
 hb click "@1"                        & rem 按引用点击（也可 hb click "#kw"）
 hb input "@1" "关键词"               & rem 清空后输入
 hb text "#result"                    & rem 读文本；attr/html/js/shot/url/tabs 同理
 hb find "a && .lnk" --json           & rem --json 放前放后都行，输出结构化结果（AI 友好）
 hb explain "a && .btn"               & rem DSL 调试：AST / 执行策略 / 下推 XPath（无需浏览器）
+hb                                   & rem 不带参数 → 打印帮助（退出码 0）
 ```
 
 引用按 backendNodeId 复活，页面跳转后失效（会明确报错，重新 find 即可）。

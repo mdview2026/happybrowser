@@ -4,7 +4,8 @@ import pytest
 
 from happybrowser import Options, Timeout
 from happybrowser._core.options import HEADLESS_UA
-from happybrowser._core.tools import parse_proxy, port_is_using, wait_until, PortFinder, raise_error
+from happybrowser._core.tools import (PortFinder, normalize_url, parse_proxy, port_is_using, raise_error,
+                                     wait_until)
 from happybrowser.errors import (CDPError, ContextLostError, WaitTimeoutError)
 
 
@@ -106,3 +107,34 @@ class TestTools:
         # ignore 返回原结果不抛
         r = raise_error({'error': 'timeout', 'method': 'm', 'args': {}}, B(), ignore=True)
         assert r['error'] == 'timeout'
+
+
+class TestNormalizeUrl:
+    """缺协议地址补默认协议：裸域名走 https，本地地址走 http，其余原样。"""
+
+    @pytest.mark.parametrize('raw, expect', [
+        ('www.baidu.com', 'https://www.baidu.com'),
+        ('www.baidu.com/s?wd=x#top', 'https://www.baidu.com/s?wd=x#top'),
+        ('example.co.uk', 'https://example.co.uk'),
+        ('baidu.com:8080', 'https://baidu.com:8080'),
+        ('localhost:9222', 'http://localhost:9222'),
+        ('localhost', 'http://localhost'),
+        ('127.0.0.1:8000/a', 'http://127.0.0.1:8000/a'),
+        ('[::1]:8080', 'http://[::1]:8080'),
+        ('http:example.com', 'http://example.com'),
+    ])
+    def test_add_scheme(self, raw, expect):
+        assert normalize_url(raw) == expect
+
+    @pytest.mark.parametrize('raw', [
+        'https://a.com', 'http://a.com/x?y=1', 'HTTPS://A.com', 'file:///C:/x.html',
+        'chrome://version', 'ws://127.0.0.1:9/', 'about:blank', 'data:text/html,<b>1</b>',
+        'javascript:void(0)', 'mailto:a@b.com', '',
+    ])
+    def test_keep_as_is(self, raw):
+        assert normalize_url(raw) == raw
+
+    @pytest.mark.parametrize('raw', ['/index.html', './a.html', '../a.html', r'C:\dir\a.html',
+                                     r'\nas\share\a.html', '~'])
+    def test_paths_untouched(self, raw):
+        assert normalize_url(raw) == raw

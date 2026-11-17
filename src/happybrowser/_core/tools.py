@@ -3,6 +3,7 @@
 遵循其许可：仅限个人学习与合法非盈利用途，商用需上游授权）。
 改造点：去除 ini/语言包依赖与 win32 窗口工具；报错中文内联；新增 parse_proxy。"""
 from pathlib import Path
+from re import compile, IGNORECASE
 from shutil import rmtree
 from tempfile import gettempdir
 from threading import Lock
@@ -13,6 +14,14 @@ from ..errors import (AlertExistsError, BrowserConnectError, CDPError, ContextLo
                       ElementLostError, IncorrectURLError, JavaScriptError, NoRectError, PageDisconnectedError,
                       StorageError, WaitTimeoutError)
 from ..settings import Settings
+
+
+# 协议识别：完整协议、不透明协议（about:/data:…）、只有协议名、路径
+_SCHEME_FULL_RE = compile(r'^[a-zA-Z][a-zA-Z0-9+.\-]*://')
+_OPAQUE_SCHEME_RE = compile(r'^(?:about|data|blob|javascript|mailto|tel):', IGNORECASE)
+_SCHEME_ONLY_RE = compile(r'^(https?|wss?|ftp|file|chrome|chrome-extension|edge|devtools)(?=:(?!//))', IGNORECASE)
+_PATH_RE = compile(r'^(?:[/\\.~]|[a-zA-Z]:[\\/])')
+_LOCAL_HOST_RE = compile(r'^(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)', IGNORECASE)
 
 
 class PortFinder(object):
@@ -69,6 +78,28 @@ def parse_proxy(proxy):
     u = urlsplit(text)
     server = f'{u.scheme}://{u.hostname}' + (f':{u.port}' if u.port else '')
     return server, u.username, u.password, proxy
+
+
+def normalize_url(url):
+    """给缺协议的地址补默认协议，让 tab.get('www.baidu.com') 也能用。
+
+    - 已带协议的（http://、https://、file://、chrome://、ws://…）原样返回；
+    - about:/data:/blob:/javascript:/mailto:/tel: 等特殊协议原样返回；
+    - localhost、127.0.0.1、[::1] 等本地地址补 http://（本地基本不用 https）；
+    - 其余裸域名（含带端口/路径/参数的）补 https://；
+    - 空值、绝对/相对路径（/x、./x、../x、C:\\x）原样返回，不当域名处理。
+    """
+    if not isinstance(url, str) or not url.strip():
+        return url
+    url = url.strip()
+    if _SCHEME_FULL_RE.match(url) or _OPAQUE_SCHEME_RE.match(url):
+        return url
+    if _SCHEME_ONLY_RE.match(url):  # http:example.com → http://example.com
+        scheme = _SCHEME_ONLY_RE.match(url).group(1).lower()
+        return f'{scheme}://{url[len(scheme) + 1:].lstrip("/")}'
+    if _PATH_RE.match(url):
+        return url
+    return ('http://' if _LOCAL_HOST_RE.match(url) else 'https://') + url
 
 
 def wait_until(func, timeout, gap=.01, err_txt=None, **kwargs):
@@ -150,4 +181,5 @@ def ensure_del_dir(path):
     return False
 
 
-__all__ = ['PortFinder', 'Settings', 'ensure_del_dir', 'parse_proxy', 'port_is_using', 'raise_error', 'wait_until']
+__all__ = ['PortFinder', 'Settings', 'ensure_del_dir', 'normalize_url', 'parse_proxy', 'port_is_using', 'raise_error',
+           'wait_until']

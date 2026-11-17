@@ -29,7 +29,7 @@ from .driver import Driver, DebugDriver
 from .launcher import connect_browser
 from .messenger import Messenger
 from .options import Options, Timeout
-from .tools import ensure_del_dir, parse_proxy, wait_until
+from .tools import ensure_del_dir, normalize_url, parse_proxy, wait_until
 
 
 class Browser(Messenger):
@@ -758,6 +758,8 @@ class BrowserContext(object):
 
 def _new_tab_by_js(browser, url, new_window, context_id):
     tab = browser._get_tab(context_id)
+    if url:
+        url = normalize_url(url)  # 缺协议自动补，与 Tab.get 行为一致
     if url and not match(r'^.*?://.*', url):
         raise IncorrectURLError(f'URL 格式不正确：{url}')
     url = f'"{url}"' if url else '""'

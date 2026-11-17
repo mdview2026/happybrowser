@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """hb CLI 集成测试：subprocess 调 .venv 里的 hb.exe，随机端口 headless 实例，绝不触碰 9222。
-覆盖：open/find(@n 引用)/input/click/text/attr/js/shot/--json 前后位置/引用失效/explain。"""
+覆盖：无参显示帮助/open/find(@n 引用)/input/click/text/attr/js/shot/--json 前后位置/引用失效/explain。"""
 import http.server
 import json
 import subprocess
@@ -101,6 +101,14 @@ def test_shot(port, server, tmp_path):
     p = tmp_path / 's.png'
     out = hb(port, 'shot', str(p))
     assert str(p) in out and p.is_file() and p.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
+
+
+def test_no_args_shows_help():
+    exe = Path(sys.executable).parent / 'hb.exe'
+    r = subprocess.run([str(exe)], check=False, capture_output=True, text=True,
+                       encoding='utf-8', timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert 'usage: hb' in r.stdout and 'explain' in r.stdout and r.stderr == ''
 
 
 def test_explain_without_browser():

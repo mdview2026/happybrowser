@@ -2,12 +2,14 @@
 """hb 命令行：用 happybrowser 快速驱动浏览器，供人工或 AI（shell 调用）使用。
 
     hb open https://example.com          # 打开页面（无 --new 则用当前标签页导航）
+    hb open www.baidu.com                # 缺协议自动补：裸域名 https，localhost/IP http
     hb find "#kw"                        # DSL 定位（? 可省略），输出 @1/@2… 引用
     hb click "@1"                        # 按引用点击（也可直接 hb click "#kw"）
     hb input "@1" "关键词"               # 清空后输入
     hb text "#result"                    # 读文本；attr/html/js/shot 同理
     hb tabs / hb tab <id前缀>            # 标签页列表与切换
     hb explain "a && .btn"               # DSL 调试：AST / 执行策略 / 下推 XPath
+    hb                                   # 不带参数：打印帮助后退出（退出码 0）
 
 会话规则：
 - 默认接管 127.0.0.1:9222 上已在跑的浏览器；端口空着则启动一只（--existing 可禁止启动）。
@@ -245,7 +247,8 @@ def main(argv=None):
                         ('--existing', '只接管已运行的浏览器，不启动')):
         ap.add_argument(flag, action='store_true', help=help_)
         common.add_argument(flag, action='store_true', default=argparse.SUPPRESS, help=help_)
-    sub = ap.add_subparsers(dest='cmd', required=True)
+    # 不给子命令时不报错，而是打印帮助后以 0 退出（人工/AI 都友好）
+    sub = ap.add_subparsers(dest='cmd')
 
     p = sub.add_parser('open', help='打开/导航页面', parents=[common])
     p.add_argument('url')
@@ -292,6 +295,9 @@ def main(argv=None):
     sub.add_parser('close', help='关闭当前标签页', parents=[common]).set_defaults(fn=cmd_close)
 
     args = ap.parse_args(argv)
+    if getattr(args, 'fn', None) is None:  # hb / hb --json / hb --port 9223 …
+        ap.print_help()
+        return 0
 
     class _Ctx:
         pass
