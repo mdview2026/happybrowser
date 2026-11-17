@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 虚拟环境与工具缓存
+.venv/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+
+# 浏览器临时数据（auto_port 实例的 user-data-dir）
+*.crx
+chrome_profile*/
+tmp/
+
+# IDE / 系统
+.idea/
+.vscode/
+Thumbs.db
+
+# 内部需求工作流文档（不随公开仓库分发）
+.requirements/
