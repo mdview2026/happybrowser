@@ -29,7 +29,7 @@ lxml 已全部内化或移除）。本文按「什么不用改 / 怎么改 / 什
 | `ele('?tag:input')` / `'t:input'` | `ele('input')` | 裸词即标签 |
 | `ele('text:确定')` / `'tx:确定'` | `ele('text*=确定')` | 精确用 `text=确定`；直属文本 `owntext*=确定` |
 | `ele('css:.btn')` / `'c:.btn'` | `ele('.btn')` | `#id` / `.class` 分词语法保留 |
-| `ele('xpath://div[@id="main"]')` / `'x:...'` | `ele('div#main')` 或 `ele('div && id=main')` | **无裸 XPath 直通**；结构轴用 `>>`（后代链）、`parent()/child()` |
+| `ele('xpath://div[@id="main"]')` / `'x:...'` | `ele('div#main')` 或 `ele('div && id=main')` | **无裸 XPath 直通**；结构轴用 `parent()/child()`（库层）；CLI 里用 `@n >> 子定位符` 在引用作用域内继续找 |
 | `ele('@@id=user@@class=row')` | `ele('id=user && .row')` | 多条件 `&&` / `\|\|` / `!` 组合 |
 | `ele('@id=user')` | `ele('@id=user')` ✅ | 单 `@` 条件恰是新 DSL 合法写法，**无缝兼容**（属性存在性 `@data-testid`） |
 | `ele('tag:input@@class=row')` | `ele('input && .row')` | |

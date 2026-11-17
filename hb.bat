@@ -12,4 +12,5 @@ if exist "%HB_ROOT%.venv\Scripts\hb.exe" (
 ) else (
     uv run --project "%HB_ROOT%." hb %*
 )
-endlocal
+set "HB_RC=%errorlevel%"
+endlocal & exit /b %HB_RC%

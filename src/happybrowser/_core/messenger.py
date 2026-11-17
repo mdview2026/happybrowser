@@ -59,10 +59,17 @@ class Messenger(object):
                 event = self._event_queue.get(timeout=1)
             except Empty:
                 continue
+            if not self._messenger_running:  # 正在断开：不再派发
+                break
             functions = self._event_handlers.get(event['method'])
             if functions:
-                for func in functions:
-                    func(**event['params'])
+                try:
+                    for func in functions:
+                        func(**event['params'])
+                except Exception:
+                    # 断开过程中事件处理必然撞上已关闭的驱动，不应刷 traceback
+                    if self._messenger_running:
+                        raise
             self._event_queue.task_done()
 
     def _debug_recv_event(self, msg):
