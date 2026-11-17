@@ -70,8 +70,14 @@ hb explain "a && .btn"               & rem DSL 调试：AST / 执行策略 / 下
 ## 安装与开发
 
 ```bash
-uv sync                # 安装（Python >= 3.9；运行依赖仅 websocket-client + requests）
-uv run pytest          # 395 项测试（含真实浏览器集成，自动端口 + headless）
+pip install happybrowser   # PyPI（Python >= 3.9；运行依赖仅 websocket-client + requests）
+```
+
+开发：
+
+```bash
+uv sync                # 安装开发环境
+uv run pytest          # 399 项测试（含真实浏览器集成，自动端口 + headless）
 uv run ruff check      # lint（fork 风格基线已配置忽略项）
 ```
 
