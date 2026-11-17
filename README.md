@@ -62,11 +62,16 @@ hb click "@1"                        & rem 按引用点击（也可 hb click "#k
 hb input "@1" "关键词"               & rem 清空后输入
 hb text "#result"                    & rem 读文本；attr/html/js/shot/url/tabs 同理
 hb find "a && .lnk" --json           & rem --json 放前放后都行，输出结构化结果（AI 友好）
+hb hl                                & rem 高亮 find 缓存的全部 @n（看清到底匹配了哪些）
+hb hl "@1" --color blue             & rem 高亮单个；也可直接 hb hl "#kw"，--all 取全部匹配
+hb nohl                              & rem 取消本页所有 hb 高亮（给目标则只取消那几条）
 hb explain "a && .btn"               & rem DSL 调试：AST / 执行策略 / 下推 XPath（无需浏览器）
 hb                                   & rem 不带参数 → 打印帮助（退出码 0）
 ```
 
 引用按 backendNodeId 复活，页面跳转后失效（会明确报错，重新 find 即可）。
+高亮用 `outline`（不占布局、不挤动页面），元素原有的内联 outline 会先备份在页面侧，
+`hb nohl` 原样还原；典型用法是 `hb find …` → `hb hl` → `hb shot` 截图确认。
 `hb --help` 看全部子命令。
 
 ## 安装与开发

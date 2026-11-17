@@ -103,6 +103,58 @@ def test_shot(port, server, tmp_path):
     assert str(p) in out and p.is_file() and p.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
 
 
+def js(port, code):
+    return json.loads(hb(port, 'js', code, '--json'))['result']
+
+
+def outline(port, sel, i=0):
+    return js(port, f'return document.querySelectorAll("{sel}")[{i}].style.outline')
+
+
+def test_hl_and_nohl(port, server):
+    hb(port, 'open', server)
+    hb(port, 'find', 'a && .lnk', '--json')
+    # 无目标 → 高亮 find 缓存的全部引用
+    out = json.loads(hb(port, 'hl', '--json'))
+    assert out['count'] == 2 and [r['target'] for r in out['highlighted']] == ['@1', '@2']
+    assert 'red' in outline(port, 'a')
+    # 重复高亮不覆盖原状备份（颜色可换）
+    hb(port, 'hl', '@1', '--color', 'blue')
+    assert 'blue' in outline(port, 'a')
+    # 单个取消：@1 还原，@2 仍亮着
+    hb(port, 'nohl', '@1')
+    assert outline(port, 'a') == ''
+    assert 'red' in outline(port, 'a', 1)
+    # 无目标取消：清光本页剩余高亮（即使 find 缓存已换代）
+    hb(port, 'find', '#q')
+    assert json.loads(hb(port, 'nohl', '--json'))['cleared'] == 1
+    assert outline(port, 'a', 1) == ''
+    assert json.loads(hb(port, 'nohl', '--json'))['cleared'] == 0  # 再清一次是空操作
+
+
+def test_hl_restores_original_outline(port, server):
+    hb(port, 'open', server)
+    probe = ('const s = document.querySelector("#q").style; '
+             'return [s.outlineWidth, s.outlineStyle, s.outlineColor].join("|")')
+    js(port, 'document.querySelector("#q").style.outline = "1px solid green";')
+    before = js(port, probe)
+    hb(port, 'hl', '#q', '--color', 'blue')
+    assert js(port, probe) == '2px|solid|blue'
+    hb(port, 'nohl', '#q')
+    assert js(port, probe) == before  # 还原到页面原有的内联 outline
+
+
+def test_hl_all_and_errors(port, server):
+    hb(port, 'open', server)
+    out = json.loads(hb(port, 'hl', 'a', '--all', '--json'))
+    assert out['count'] == 2 and out['highlighted'][1]['target'] == 'a#2'
+    hb(port, 'nohl')  # 不带 --all 的定位符只取首个
+    assert json.loads(hb(port, 'hl', 'a', '--json'))['count'] == 1
+    hb(port, 'nohl')
+    hb(port, 'hl', '#nope', expect_fail=True)  # 未找到 → 错误退出
+    assert json.loads(hb(port, 'nohl', '--json'))['cleared'] == 0  # 无高亮时不报错
+
+
 def test_no_args_shows_help():
     exe = Path(sys.executable).parent / 'hb.exe'
     r = subprocess.run([str(exe)], check=False, capture_output=True, text=True,

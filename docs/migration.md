@@ -69,7 +69,7 @@ lxml 已全部内化或移除）。本文按「什么不用改 / 怎么改 / 什
 | `_build_query`（Q.tag / Q.attr('class').contains OR 链 / kwargs 下划线转中划线） | **原样可用** |
 | `find_button`（Q.text.eq + is_clickable + 向上找 button + CJK 逐字分渲染变体） | **原样可用**（含 `' '.join(btn_label)` 变体） |
 | `paste`（click + `ele.tab.actions.type(Keys.CTRL_V)`） | **原样可用**（Element.tab 归属链已通） |
-| `hl` / `nohl`（`set.style('border', ...)`） | 原样可用；注意读回是计算样式，`red` 归一化为 `rgb(255, 0, 0)` |
+| `hl` / `nohl`（`set.style('border', ...)`） | 原样可用；注意读回是计算样式，`red` 归一化为 `rgb(255, 0, 0)`。CLI 另有 `hb hl` / `hb nohl`（outline，不占布局，可还原原内联样式） |
 | `scrollable_parent`（run_js scrollHeight + parent 上溯） | 原样可用 |
 | `set_value_by_label`（`'tag:input'`） | `'tag:input'` → `'input'` |
 | `find_input`（`'t:input'`） | 同上 |

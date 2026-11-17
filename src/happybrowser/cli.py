@@ -7,6 +7,7 @@
     hb click "@1"                        # 按引用点击（也可直接 hb click "#kw"）
     hb input "@1" "关键词"               # 清空后输入
     hb text "#result"                    # 读文本；attr/html/js/shot 同理
+    hb hl / hb hl "@1"                   # 高亮（无参=高亮 find 缓存的所有引用；nohl 取消）
     hb tabs / hb tab <id前缀>            # 标签页列表与切换
     hb explain "a && .btn"               # DSL 调试：AST / 执行策略 / 下推 XPath
     hb                                   # 不带参数：打印帮助后退出（退出码 0）
@@ -82,21 +83,32 @@ def _save_refs(ctx, eles):
     _save_state(ctx.port, ctx.state)
 
 
+def _revive_ref(ctx, target):
+    """@n 引用复活：成功返回 (ele, None)，失败返回 (None, 原因)。"""
+    refs = ctx.state.get('refs') or []
+    try:
+        index = int(target[1:])
+    except ValueError:
+        index = 0
+    if not 1 <= index <= len(refs):
+        return None, f'引用 {target} 不存在（当前缓存 {len(refs)} 条，请先 find）'
+    ref = refs[index - 1]
+    if ctx.state.get('tab_id') != ctx.tab.tab_id:
+        return None, '引用属于另一个标签页，请在本页重新 find'
+    ele = Element(ctx.tab, backend_id=ref['backend_id'])  # 三 id 懒互转，构造零开销
+    try:
+        _ = ele.tag  # 触发一次 describeNode，验证节点还活着
+    except BaseError:
+        return None, f'引用 {target} 已失效（页面大概跳转过），请重新 find'
+    return ele, None
+
+
 def _resolve(ctx, target, method):
     """@n 走状态引用复活，否则按 DSL 定位符查找。"""
     if target.startswith('@'):
-        refs = ctx.state.get('refs') or []
-        try:
-            ref = refs[int(target[1:]) - 1]
-        except (ValueError, IndexError):
-            _fail(f'引用 {target} 不存在（当前缓存 {len(refs)} 条，请先 find）')
-        if ctx.state.get('tab_id') != ctx.tab.tab_id:
-            _fail('引用属于另一个标签页，请在本页重新 find')
-        ele = Element(ctx.tab, backend_id=ref['backend_id'])  # 三 id 懒互转，构造零开销
-        try:
-            _ = ele.tag  # 触发一次 describeNode，验证节点还活着
-        except BaseError:
-            _fail(f'引用 {target} 已失效（页面大概跳转过），请重新 find')
+        ele, err = _revive_ref(ctx, target)
+        if err:
+            _fail(err)
         return ele
     ele = ctx.tab.ele(target, timeout=ctx.timeout)
     if isinstance(ele, NoneElement):
@@ -221,6 +233,135 @@ def cmd_close(ctx, a):
     _out(ctx, {'closed': True}, '已关闭')
 
 
+# ----------------------------------------------------------------高亮
+# 用 outline 而非 border：不占布局，不会让页面元素“跳”一下。
+# 元素原有的内联 outline 备份在页面侧 WeakMap + Set（window.__hb_hl），
+# 所以重复 hl 不覆盖备份、nohl 能写回原状，无目标 nohl 可整页清空。
+_HL_ON_JS = '''
+const KEY = '__hb_hl';
+window[KEY] = window[KEY] || {store: new WeakMap(), all: new Set()};
+const reg = window[KEY];
+if (!reg.store.has(this)) reg.store.set(this, [this.style.outline, this.style.outlineOffset]);
+reg.all.add(this);
+this.style.outline = '2px solid ' + %s;
+this.style.outlineOffset = '1px';
+return true;
+'''
+
+_HL_OFF_JS = '''
+const KEY = '__hb_hl';
+const reg = window[KEY];
+if (!reg || !reg.store.has(this)) return false;
+const saved = reg.store.get(this);
+this.style.outline = saved[0];
+this.style.outlineOffset = saved[1];
+reg.store.delete(this);
+reg.all.delete(this);
+return true;
+'''
+
+_HL_CLEAR_JS = '''
+const KEY = '__hb_hl';
+const reg = window[KEY];
+if (!reg) return 0;
+let n = 0;
+for (const el of reg.all) {
+    const saved = reg.store.get(el);
+    if (saved) {
+        el.style.outline = saved[0];
+        el.style.outlineOffset = saved[1];
+        reg.store.delete(el);
+        n++;
+    }
+}
+reg.all.clear();
+return n;
+'''
+
+
+def _hl_expand(ctx, a):
+    """把 hl/nohl 的目标展开为 [(label, ele)] 与错误说明列表。
+
+    不给目标 → find 缓存的全部引用；--all 时定位符取全部匹配（默认只取首个）；
+    解析失败不直接退出，交调用方决定是报错还是忽略（nohl 需要容忍失效引用）。
+    """
+    targets = list(a.targets)
+    if not targets:
+        targets = [f'@{i + 1}' for i in range(len(ctx.state.get('refs') or []))]
+        if not targets:
+            return [], ['没有可用的引用（先 hb find 再 hl，或直接给定位符）']
+    pairs, errors = [], []
+    for target in targets:
+        if target.startswith('@'):
+            ele, err = _revive_ref(ctx, target)
+            if err:
+                errors.append(err)
+            else:
+                pairs.append((target, ele))
+        elif a.all:
+            eles = ctx.tab.eles(target, timeout=ctx.timeout)
+            if not eles:
+                errors.append(f'未找到：{target!r}（timeout={ctx.timeout}s）')
+            pairs += [(f'{target}#{i + 1}', ele) for i, ele in enumerate(eles)]
+        else:
+            ele = ctx.tab.ele(target, timeout=ctx.timeout)
+            if isinstance(ele, NoneElement):
+                errors.append(f'未找到：{target!r}（timeout={ctx.timeout}s）')
+            else:
+                pairs.append((target, ele))
+    return pairs, errors
+
+
+def _warn(errors):
+    for err in errors:
+        print(f'警告：{err}', file=sys.stderr)
+
+
+def cmd_hl(ctx, a):
+    pairs, errors = _hl_expand(ctx, a)
+    js = _HL_ON_JS % json.dumps(a.color)
+    rows = []
+    for label, ele in pairs:
+        try:
+            ele.run_js(js)
+            rows.append({'target': label, **_ele_brief(ele)})
+        except BaseError as e:  # 找完到高亮之间元素消失等
+            errors.append(f'{label} 高亮失败：{e}')
+    if not rows:
+        _fail('；'.join(errors) if errors else '没有高亮任何元素')
+    _warn(errors)
+    if ctx.json:
+        _out(ctx, {'count': len(rows), 'color': a.color, 'highlighted': rows}, '')
+        return
+    print(f'已高亮 {len(rows)} 个元素（{a.color}）：')
+    for r in rows:
+        id_part = f" id={r['id']!r}" if r['id'] else ''
+        print(f"  {r['target']}  <{r['tag']}>{id_part}  {r['text']}")
+
+
+def cmd_nohl(ctx, a):
+    cleared, restored, errors = 0, [], []
+    if a.targets:  # 指定目标：只取消这些
+        pairs, errors = _hl_expand(ctx, a)
+        for label, ele in pairs:
+            try:
+                if ele.run_js(_HL_OFF_JS):
+                    restored.append(label)
+                    cleared += 1
+                else:
+                    errors.append(f'{label} 没有 hb 留下的高亮（未改动）')
+            except BaseError as e:
+                errors.append(f'{label} 取消高亮失败：{e}')
+    else:  # 不给目标：清空本页所有 hb 高亮（find 缓存换代后也能清干净）
+        try:
+            cleared += ctx.tab.run_js(_HL_CLEAR_JS) or 0
+        except BaseError as e:
+            _fail(f'清空高亮失败：{e}')
+    _warn(errors)
+    _out(ctx, {'cleared': cleared, 'targets': restored},
+         f'已取消 {cleared} 个高亮' if cleared else '没有需要取消的高亮')
+
+
 # 不需要浏览器连接的子命令（本地即可执行）
 _NO_BROWSER = {cmd_explain}
 
@@ -287,6 +428,19 @@ def main(argv=None):
     p.set_defaults(fn=cmd_shot)
 
     sub.add_parser('url', help='当前页 url/标题', parents=[common]).set_defaults(fn=cmd_url)
+
+    p = sub.add_parser('hl', help='高亮元素（outline，不占布局）', parents=[common])
+    p.add_argument('targets', nargs='*',
+                   help='定位符或 @n 引用（省略则高亮 find 缓存的全部引用）')
+    p.add_argument('--all', action='store_true', help='定位符匹配的全部元素（默认只首个）')
+    p.add_argument('--color', default='red', help='颜色（默认 red）')
+    p.set_defaults(fn=cmd_hl)
+
+    p = sub.add_parser('nohl', help='取消高亮（省略目标则清空本页全部）', parents=[common])
+    p.add_argument('targets', nargs='*',
+                   help='定位符或 @n 引用（省略则清空当前页所有 hb 高亮）')
+    p.add_argument('--all', action='store_true', help='定位符匹配的全部元素（默认只首个）')
+    p.set_defaults(fn=cmd_nohl)
 
     p = sub.add_parser('explain', help='DSL 调试（无需浏览器）', parents=[common])
     p.add_argument('locator')
