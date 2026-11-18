@@ -192,7 +192,7 @@ def test_run_script(port, server, tmp_path):
         f'#! hb --port {port}\n'
         f'open {server}\n'
         'find "#q"\n'
-        'let kw = 世界\n'
+        'let kw = "世界"\n'
         'input @1 "${kw}"\n'
         'click "#go"\n'
         'text "#out"\n'
@@ -230,7 +230,7 @@ def test_eval_code_argument(port, server):
     code = '\n'.join([
         f'open {server}',
         'find "#q"',
-        'let kw = 世界',
+        'let kw = "世界"',
         'input @1 "${kw}"',
         'click "#go"',
         'text "#out"',
@@ -244,7 +244,7 @@ def test_eval_repeated_segments(port, server):
     """可重复 -e 依次拼接（cmd.exe 不方便传换行时的退化写法）；代码里的 .hb 不当文件。"""
     r = hb_raw('--port', port,
                '-e', f'open {server}', '-e', 'find "#q"',
-               '-e', 'attr @1 id', '-e', 'echo see flow.hb')
+               '-e', 'attr @1 "id"', '-e', 'echo see flow.hb')
     assert r.returncode == 0, r.stderr
     lines = [ln.strip() for ln in r.stdout.splitlines()]
     assert 'q' in lines and lines[-1] == 'see flow.hb'

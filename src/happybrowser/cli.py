@@ -23,7 +23,10 @@
   比逐条 hb 调用快得多；@n 引用 / 当前标签页在脚本内自然共享。
 - AI 用 `hb -e "<代码>"` 最方便：不落盘、不需要文件路径，可多次 -e 依次拼接。
 - `--headless` 可写进 `#!` 头行（`#! --headless --port 9222`），无头模式不占窗口。
-- 语法见 happybrowser.hbscript：注释、#! 头行、let 变量 + ${name} 插值、sleep、echo。
+- 语法见 happybrowser.hbscript：注释、#! 头行、let 变量 + ${name} 插值、sleep/echo、
+  debug/info/warn/error 日志 + loglevel、assert 断言、if/elif/else、loop/for 缩进块。
+- `run 子脚本.hb 参数…`：同进程嵌套执行另一个脚本；子脚本用 ${1}/${2}…、
+  ${argc}、${argv} 取参数；变量隔离，日志门槛与失败计数共享。
 - 默认遇错即停（退出码 1）；-c/--continue 继续后续行，结尾汇总失败条数。
 
 会话规则：
@@ -50,7 +53,8 @@ from ._core.tools import port_is_using
 from ._elements.element import Element
 from ._elements.none_element import NoneElement
 from .errors import BaseError
-from .hbscript import ScriptError, interpolate, parse_let, parse_script
+from .hbscript import (LOG_LEVELS, Assert, For, If, ListLit, Loop, ScriptError,
+                       eval_expr, interpolate, parse_let, parse_script, value_of)
 
 STATE_DIR = Path.home() / '.happybrowser'
 _MAX_REFS = 50          # find 最多缓存的引用数，防止状态文件膨胀
@@ -720,65 +724,267 @@ def _sticky_options(ctx, tokens, ns):
         _fail('无头模式只能在 #! 头行或 hb 命令行指定（连接已建立）')
 
 
-def _exec_script(ctx, ap, script, args):
-    """逐行执行：每行仍走同一套 argparse 子命令，错误带行号。"""
-    variables, failures = {}, 0
-    for cmd in script.commands:
-        if args.echo:
-            print(f'+ {cmd.raw}', file=sys.stderr)
+# ----------------------------------------------------------------脚本解释器（遍历 hbscript 的 AST）
+
+class _ScriptEnv:
+    """一段脚本的执行状态：变量、失败计数、日志门槛、嵌套 run 信息。"""
+
+    def __init__(self):
+        self.variables = {}
+        self.failures = 0
+        self.log_level = LOG_LEVELS['info']
+        self.name = ''                  # 当前脚本名（报错定位；嵌套 run 时切换）
+        self.base_dir = Path.cwd()      # 嵌套 run 的相对路径解析基准
+        self.depth = 0                  # run 嵌套层数（防循环调用）
+
+
+class _AbortScript(Exception):
+    """某行失败且未开 -c 时，用它展开递归执行栈。"""
+
+
+def _emit_log(env, level, msg):
+    """日志统一出口：走 stderr（stdout 留给数据）；error = 软断言，记失败但继续。"""
+    if LOG_LEVELS[level] >= env.log_level:
+        print(f'[{level.upper()}] {msg}', file=sys.stderr)
+    if level == 'error':
+        env.failures += 1
+
+
+def _render_line(cmd, variables):
+    """命令行 → 字符串 argv：命令名只做 ${} 插值；参数按类型系统取值（裸标识符 = 变量）。"""
+    quoted = cmd.quoted or [False] * len(cmd.tokens)
+    head = interpolate([cmd.tokens[0]], variables)[0]
+    args = []
+    for text, q in zip(cmd.tokens[1:], quoted[1:]):
+        v = value_of(text, q, variables, strict=True)
+        args.append(v if isinstance(v, str) else str(v))
+    return [head] + args
+
+
+def _bi_let(ctx, env, cmd):
+    quoted = cmd.quoted or [False] * len(cmd.tokens)
+    name, value = parse_let(cmd.tokens[1:], quoted[1:], env.variables)
+    env.variables[name] = value   # 值保留类型（数字/字符串/列表/变量引用）
+
+
+def _bi_sleep(ctx, env, cmd):
+    time.sleep(_sleep_seconds(_render_line(cmd, env.variables)))
+
+
+def _bi_echo(ctx, env, cmd):
+    print(' '.join(interpolate(cmd.tokens[1:], env.variables)),
+          file=sys.stderr if ctx.json else sys.stdout)
+
+
+def _bi_log(ctx, env, cmd):
+    _emit_log(env, cmd.tokens[0], ' '.join(interpolate(cmd.tokens[1:], env.variables)))
+
+
+def _bi_loglevel(ctx, env, cmd):
+    tokens = interpolate(cmd.tokens, env.variables)
+    if len(tokens) != 2 or tokens[1] not in LOG_LEVELS:
+        raise ScriptError(f'loglevel 需要级别名：{"/".join(LOG_LEVELS)}（默认 info）')
+    env.log_level = LOG_LEVELS[tokens[1]]
+
+
+# 脚本内建命令表：新增内建命令在这里登记即可，不动解释器本体
+_BUILTINS = {'let': _bi_let, 'set': _bi_let, 'sleep': _bi_sleep, 'echo': _bi_echo,
+             'loglevel': _bi_loglevel,
+             'debug': _bi_log, 'info': _bi_log, 'warn': _bi_log, 'error': _bi_log}
+
+
+def _restore_var(variables, name, saved):
+    """循环结束后还原被占用的变量（内层循环不污染外层）。"""
+    if saved is None:
+        variables.pop(name, None)
+    else:
+        variables[name] = saved
+
+
+def _exec_stmts(ctx, ap, stmts, args, env):
+    for stmt in stmts:
+        _exec_stmt(ctx, ap, stmt, args, env)
+
+
+def _where(env):
+    """错误定位前缀：知道脚本名就带上（嵌套 run 时尤其需要）。"""
+    return f'{env.name} ' if env.name else ''
+
+
+def _exec_stmt(ctx, ap, stmt, args, env):
+    try:
+        _dispatch_stmt(ctx, ap, stmt, args, env)
+    except (ScriptError, _CliError, BaseError, SystemExit) as e:
+        # BaseError：库内错误（JS 抛异常、元素丢失等）不刷 traceback
+        # SystemExit：argparse 参数错误（usage 已由 argparse 打印）
+        env.failures += 1
+        detail = '命令行参数不正确' if isinstance(e, SystemExit) else str(e)
+        print(f'错误（{_where(env)}第 {stmt.lineno} 行）：{detail}', file=sys.stderr)
+        if not args.keep_going:
+            raise _AbortScript from None
+
+
+def _dispatch_stmt(ctx, ap, stmt, args, env):
+    if isinstance(stmt, If):
+        for expr, body in stmt.branches:
+            if eval_expr(expr, env.variables):
+                _exec_stmts(ctx, ap, body, args, env)
+                return
+        _exec_stmts(ctx, ap, stmt.else_body, args, env)
+        return
+    if isinstance(stmt, Loop):
+        count = _loop_count(stmt, env)
+        saved = env.variables.get('i')
         try:
-            tokens = interpolate(cmd.tokens, variables)
-            head = tokens[0]
-            if head in ('let', 'set'):
-                name, value = parse_let(tokens[1:])
-                variables[name] = value
-                continue
-            if head == 'sleep':
-                time.sleep(_sleep_seconds(tokens))
-                continue
-            if head == 'echo':
-                print(' '.join(tokens[1:]), file=sys.stderr if ctx.json else sys.stdout)
-                continue
-            sub = ap.parse_args(tokens)
-            fn = getattr(sub, 'fn', None)
-            if fn is None:  # 只有全局选项的行（"--json" / "--timeout 2"）
-                _sticky_options(ctx, tokens, sub)
-                continue
-            if fn is cmd_run:
-                _fail('脚本里不能再嵌套 run')
-            saved = (ctx.json, ctx.timeout)
+            for k in range(1, count + 1):
+                env.variables['i'] = k   # 计数是数字类型（可参与 assert i > 0）
+                _exec_stmts(ctx, ap, stmt.body, args, env)
+        finally:
+            _restore_var(env.variables, 'i', saved)
+        return
+    if isinstance(stmt, For):
+        _exec_for(ctx, ap, stmt, args, env)
+        return
+    if isinstance(stmt, Assert):
+        if not eval_expr(stmt.expr, env.variables):
+            msg = ' '.join(interpolate(stmt.msg, env.variables))
+            text = f'断言失败：{stmt.cond}' + (f'（{msg}）' if msg else '')
+            print(f'[ASSERT] {_where(env)}第 {stmt.lineno} 行：{text}', file=sys.stderr)
+            env.failures += 1   # 断言失败 = 记失败、继续跑，收集全部问题
+        return
+    _exec_command(ctx, ap, stmt, args, env)
+
+
+def _loop_count(stmt, env):
+    raw = value_of(stmt.count[0], False, env.variables, strict=True)   # loop rounds: 认裸变量名
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        raise ScriptError(f'loop 次数不是整数：{raw!r}（变量未定义？）') from None
+
+
+def _exec_for(ctx, ap, stmt, args, env):
+    node = stmt.iterable
+    if isinstance(node, ListLit):
+        items = [value_of(lit.text, lit.quoted, env.variables, strict=True)
+                 for lit in node.items]
+    else:
+        v = value_of(node.text, node.quoted, env.variables, strict=True)
+        if isinstance(v, str) and v.startswith('range(') and v.endswith(')'):
+            inner = v[6:-1].strip()
             try:
-                # 行内 --json/--timeout 只作用于本行，不污染后续行
-                if '--json' in tokens:
-                    ctx.json = True
-                if '--timeout' in tokens:
-                    ctx.timeout = sub.timeout
-                if '--port' in tokens and sub.port != ctx.port:
-                    _fail(f'端口只能在 #! 头行或 hb 命令行指定（已连接 {ctx.port}）')
-                if '--headless' in tokens and not ctx.headless:
-                    _fail('无头模式只能在 #! 头行或 hb 命令行指定（连接已建立）')
-                fn(ctx, sub)
-            finally:
-                ctx.json, ctx.timeout = saved
-        except (ScriptError, _CliError) as e:
-            failures += 1
-            print(f'错误（第 {cmd.lineno} 行）：{e}', file=sys.stderr)
-            if not args.keep_going:
-                return 1
-        except BaseError as e:   # 库内错误（JS 抛异常、元素丢失等）不刷 traceback
-            failures += 1
-            print(f'错误（第 {cmd.lineno} 行）：{e}', file=sys.stderr)
-            if not args.keep_going:
-                return 1
-        except SystemExit:  # argparse 参数错误（usage 已由 argparse 打印）
-            failures += 1
-            print(f'错误（第 {cmd.lineno} 行）：命令行参数不正确', file=sys.stderr)
-            if not args.keep_going:
-                return 1
-    if failures:
-        print(f'脚本结束：{failures} 条命令失败', file=sys.stderr)
+                items = list(range(max(0, int(inner))))
+            except ValueError:
+                raise ScriptError(f'range() 的参数不是整数：{inner!r}（变量未定义？）') from None
+        elif isinstance(v, list):
+            items = v
+        else:
+            raise ScriptError('for 需要列表（["a", "b"]）、range(N) 或列表变量')
+    saved_name = env.variables.get(stmt.name)
+    saved_i = env.variables.get('i')
+    try:
+        for k, item in enumerate(items, 1):
+            env.variables[stmt.name] = item
+            if stmt.name != 'i':   # for i in range(N)：i 是取值本身，不再当计数器
+                env.variables['i'] = k
+            _exec_stmts(ctx, ap, stmt.body, args, env)
+    finally:
+        _restore_var(env.variables, stmt.name, saved_name)
+        _restore_var(env.variables, 'i', saved_i)
+
+
+_MAX_RUN_DEPTH = 16   # run 嵌套上限：超过基本是脚本循环调用了
+
+
+def _exec_nested_run(ctx, ap, cmd, args, env):
+    """`run 子脚本.hb 参数…`：同进程执行另一个 .hb 脚本。
+
+    - 参数按类型系统取值（数字/字符串/列表都保留类型），子脚本里用
+      ${1}/${2}…（位置参数）、${argc}（个数）、${argv}（列表，可 for）取用。
+    - 变量隔离：子脚本只看到参数，结束后父变量原样恢复；
+      日志门槛与失败计数全局共享（@n 引用/当前标签页同进程天然共享）。
+    - 相对路径相对调用脚本所在目录解析。
+    """
+    quoted = cmd.quoted or [False] * len(cmd.tokens)
+    argv = [value_of(t, q, env.variables, strict=True)
+            for t, q in zip(cmd.tokens[1:], quoted[1:])]
+    if not argv or not isinstance(argv[0], str):
+        raise ScriptError('run 需要脚本路径，如：run lib/login.hb "张三" 3')
+    if env.depth >= _MAX_RUN_DEPTH:
+        raise ScriptError(f'run 嵌套超过 {_MAX_RUN_DEPTH} 层（是不是循环调用了？）')
+    p = Path(argv[0])
+    if not p.is_absolute():
+        p = env.base_dir / p
+    try:
+        text = p.read_text(encoding='utf-8-sig')
+    except OSError as e:
+        raise ScriptError(f'读取脚本失败：{e}') from None
+    try:
+        sub = parse_script(text)
+    except ScriptError as e:
+        raise ScriptError(f'{p.name}：{e}') from None
+    # 子环境：变量换成参数表，脚本名与路径基准切换，结束后恢复
+    saved = (env.variables, env.name, env.base_dir)
+    child = {'argv': argv[1:], 'argc': len(argv) - 1}
+    for k, v in enumerate(argv[1:], 1):
+        child[str(k)] = v
+    env.variables, env.name, env.base_dir = child, p.name, p.parent
+    env.depth += 1
+    try:
+        _exec_stmts(ctx, ap, sub.commands, args, env)
+    finally:
+        env.variables, env.name, env.base_dir = saved
+        env.depth -= 1
+
+
+def _exec_command(ctx, ap, cmd, args, env):
+    """平铺语句：内建命令 → 查表分发（拿原始 tokens + 引号标记）；其余走 hb 子命令。"""
+    if args.echo:
+        print(f'+ {cmd.raw}', file=sys.stderr)
+    if cmd.tokens[0] == 'run':   # 嵌套 run 特判：需要 ap/args/env，不走内建表
+        _exec_nested_run(ctx, ap, cmd, args, env)
+        return
+    builtin = _BUILTINS.get(cmd.tokens[0])
+    if builtin is not None:
+        builtin(ctx, env, cmd)
+        return
+    tokens = _render_line(cmd, env.variables)   # 子命令参数渲染成字符串 argv
+    sub = ap.parse_args(tokens)
+    fn = getattr(sub, 'fn', None)
+    if fn is None:  # 只有全局选项的行（"--json" / "--timeout 2"）
+        _sticky_options(ctx, tokens, sub)
+        return
+    saved = (ctx.json, ctx.timeout)
+    try:
+        # 行内 --json/--timeout 只作用于本行，不污染后续行
+        if '--json' in tokens:
+            ctx.json = True
+        if '--timeout' in tokens:
+            ctx.timeout = sub.timeout
+        if '--port' in tokens and sub.port != ctx.port:
+            _fail(f'端口只能在 #! 头行或 hb 命令行指定（已连接 {ctx.port}）')
+        if '--headless' in tokens and not ctx.headless:
+            _fail('无头模式只能在 #! 头行或 hb 命令行指定（连接已建立）')
+        fn(ctx, sub)
+    finally:
+        ctx.json, ctx.timeout = saved
+
+
+def _exec_script(ctx, ap, script, args):
+    """遍历 AST 执行；错误带行号，默认遇错即停（-c 继续），结尾汇总失败条数。"""
+    env = _ScriptEnv()
+    if script.path:   # 文件脚本：记录名字与目录（嵌套 run 的相对路径基准）
+        p = Path(script.path).resolve()
+        env.name, env.base_dir = p.name, p.parent
+    aborted = False
+    try:
+        _exec_stmts(ctx, ap, script.commands, args, env)
+    except _AbortScript:
+        aborted = True   # 遇错即停：错误行已报过，不再打总结行
+    if env.failures and not aborted:
+        print(f'脚本结束：{env.failures} 条命令失败', file=sys.stderr)
         return 1
-    return 0
+    return 1 if env.failures else 0
 
 
 def _run_source(ap, args, name, text, explicit=()):
@@ -787,6 +993,8 @@ def _run_source(ap, args, name, text, explicit=()):
         script = parse_script(text)
     except ScriptError as e:
         _fail(f'{name}：{e}')
+    if name not in ('stdin', '<-e>'):
+        script.path = name   # 记录路径：报错带脚本名 + 嵌套 run 相对路径基准
     ctx = _new_ctx(args, explicit)
     _apply_header(ap, script, ctx, name)
     try:

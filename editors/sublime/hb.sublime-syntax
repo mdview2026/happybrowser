@@ -1,0 +1,132 @@
+%YAML 1.2
+---
+# .hb 脚本（happybrowser CLI）语法高亮 —— Sublime Text
+# 安装：复制本文件到 %APPDATA%\Sublime Text\Packages\User\ （或对应 Packages/User 目录），
+#       打开 .hb 文件即自动生效；也可右下角语法列表里手动选「hb Script」。
+name: hb Script
+file_extensions:
+  - hb
+scope: source.hb
+
+contexts:
+  main:
+    - include: header
+    - include: comment-line
+    - include: string-double
+    - include: string-single
+    - include: variable
+    - include: comment-inline
+    - include: number
+    - include: reference
+    - include: locator-id
+    - include: keyword-control
+    - include: keyword-declaration
+    - include: command-log
+    - include: command-builtin
+    - include: command-sub
+    - include: operator-word
+    - include: operator-compare
+    - include: list-punct
+
+  # #! 头行（仅文件第一行是头行；其余位置的 #! 也按注释高亮，无害）
+  header:
+    - match: '\A\s*#!.*$'
+      scope: comment.line.shebang.hb
+
+  # 整行注释
+  comment-line:
+    - match: '^\s*#.*$'
+      scope: comment.line.number-sign.hb
+
+  # 行内注释：只有「空格 # 空格/行尾」才算（保住 find #kw 的 #kw 定位符）
+  comment-inline:
+    - match: '(?<=\s)#(?=\s|$).*$'
+      scope: comment.line.number-sign.hb
+
+  # 字符串（引号内不转义；${name} 插值仍然高亮）
+  string-double:
+    - match: '"'
+      scope: punctuation.definition.string.begin.hb
+      push:
+        - meta_scope: string.quoted.double.hb
+        - include: variable
+        - match: '"'
+          scope: punctuation.definition.string.end.hb
+          pop: true
+
+  string-single:
+    - match: "'"
+      scope: punctuation.definition.string.begin.hb
+      push:
+        - meta_scope: string.quoted.single.hb
+        - include: variable
+        - match: "'"
+          scope: punctuation.definition.string.end.hb
+          pop: true
+
+  # ${name} 变量插值
+  variable:
+    - match: '\$({)([A-Za-z_][A-Za-z0-9_]*)(})'
+      scope: variable.other.hb
+      captures:
+        1: punctuation.definition.variable.begin.hb
+        3: punctuation.definition.variable.end.hb
+
+  # 数字字面量（整数 / 小数；负号不包进来，避免和选项 --timeout 混淆）
+  number:
+    - match: '(?<![\w.])\d+(\.\d+)?\b'
+      scope: constant.numeric.hb
+
+  # @1 / @2 元素引用
+  reference:
+    - match: '@\d+\b'
+      scope: constant.other.reference.hb
+
+  # #id 定位符（# 后紧跟非空格，所以不会和注释冲突）
+  locator-id:
+    - match: '#[\w\-]+'
+      scope: entity.name.tag.hb
+
+  # 块语句与断言（只高亮行首关键字）
+  keyword-control:
+    - match: '^\s*(if|elif|else|assert)\b'
+      scope: keyword.control.conditional.hb
+    - match: '^\s*(loop|for)\b'
+      scope: keyword.control.loop.hb
+
+  # 变量定义
+  keyword-declaration:
+    - match: '^\s*(let|set)\b'
+      scope: storage.type.hb
+
+  # 日志与日志门槛
+  command-log:
+    - match: '^\s*(debug|info|warn|error|loglevel)\b'
+      scope: support.function.log.hb
+
+  # 脚本内建
+  command-builtin:
+    - match: '^\s*(sleep|echo)\b'
+      scope: support.function.builtin.hb
+
+  # hb 子命令（只高亮行首）
+  command-sub:
+    - match: '^\s*(open|find|click|input|text|attr|html|js|shot|url|tabs|tab|hl|nohl|explain|close|run)\b'
+      scope: support.function.command.hb
+
+  # 词法运算符：and / or / not / in / range()
+  operator-word:
+    - match: '\b(and|or|not|in)\b'
+      scope: keyword.operator.word.hb
+    - match: '\b(range)(?=\()'
+      scope: support.function.builtin.hb
+
+  # 比较运算符
+  operator-compare:
+    - match: '(==|!=|<=|>=|<|>)'
+      scope: keyword.operator.comparison.hb
+
+  # 列表字面量的括号
+  list-punct:
+    - match: '[\[\]]'
+      scope: punctuation.section.brackets.hb

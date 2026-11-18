@@ -71,7 +71,7 @@ hb hl "@1" --color blue             & rem 高亮单个；也可直接 hb hl "#kw
 hb nohl                              & rem 取消本页所有 hb 高亮（给目标则只取消那几条）
 hb explain "a && .btn"               & rem DSL 调试：AST / 执行策略 / 下推 XPath（无需浏览器）
 hb run flow.hb                       & rem 执行 .hb 脚本（单进程）；等价简写 hb flow.hb
-hb -e "find #kw" -e "input @1 haha" & rem 代码直接当参数（AI 常用，不落盘）
+hb -e "find #kw" -e "input @1 'haha'"   & rem 代码直接当参数（AI 常用，不落盘；字符串加引号）
 hb --headless open https://a.com     & rem 无头模式：不占窗口
 hbh open https://a.com               & rem 等价 hb --headless（仓库根 hbh.bat）
 hb                                   & rem 不带参数 → 打印帮助（退出码 0）
@@ -90,10 +90,10 @@ hb                                   & rem 不带参数 → 打印帮助（退�
 
 ```bat
 hb --headless open https://example.com   & rem 无头运行，不弹窗、不抢焦点
-hb --headless -e "find #kw" -e "input @1 haha"
+hb --headless -e "find #kw" -e "input @1 'haha'"
 
 hbh open https://example.com             & rem 仓库根 hbh.bat = hb --headless
-hbh -e "find #kw" -e "input @1 haha"
+hbh -e "find #kw" -e "input @1 'haha'"
 hbh run flow.hb
 ```
 
@@ -118,10 +118,38 @@ hbh run flow.hb
 open https://example.com/chat
 find "#chat-textarea"
 hl
-let text = 你好，世界
+let text = "你好，世界"
 input @1 "${text}"
 click "button && text*=发送"
 text "#last-message"
+```
+
+脚本语言向 Python 靠拢（冒号 + 缩进块、类型化值），够写一般的巡检/测试脚本：
+
+```hb
+# test.hb：日志 + 断言 + 分支 + 循环
+loglevel debug                  ← 日志门槛：debug/info/warn/error（默认 info）
+open https://example.com/login
+let user = "tester"
+find "#username"
+input @1 "${user}"              ← 命令参数里取变量用 ${name}
+click "button && text*=登录"
+sleep 1
+
+info 登录流程已提交               ← 日志走 stderr；error 会记一次失败（退出码 1）
+assert user == "tester"         ← 断言失败：打 [ASSERT]、记失败、继续跑完
+                                ←   裸标识符 = 变量；字符串字面量必须加引号
+
+loop 3:                         ← 固定次数循环，${i} 是 1 起的计数
+    debug 第 ${i} 次轮询
+for x in ["苹果", "香蕉"]:       ← 遍历列表（也可 for i in range(N):）
+    info 处理 ${x}
+
+if user == "tester":            ← 条件：and/or/not、==/!=/</>、in/not in、括号、列表
+    info 用户符合预期
+else:
+    error 用户变量为空
+if user: debug 单行内联也可以
 ```
 
 ```bat
@@ -131,10 +159,12 @@ hb run chat.hb --echo   & rem 逐行回显到 stderr（看执行到哪了）
 type script.hb | hb run -   & rem 从 stdin 读脚本
 ```
 
+完整可运行示例（变量/日志/断言/分支/循环全覆盖）：[`examples/demo.hb`](examples/demo.hb)。
+
 AI / 程序调用不必落盘：代码可以直接作为参数传，`-e` 可重复（按顺序用换行拼接）：
 
 ```bat
-hb -e "open https://example.com" -e "find #chat-textarea" -e "input @1 haha"
+hb -e "open https://example.com" -e "find #chat-textarea" -e "input @1 'haha'"
 hb --json -e "open https://example.com" -e "find .lnk"   & rem 每行一条 JSON
 ```
 
@@ -144,11 +174,28 @@ hb --json -e "open https://example.com" -e "find .lnk"   & rem 每行一条 JSON
 
 - 每行 = 一条子命令（等同在该行前面加 `hb `）；`"…"` / `'…'` 包住含空格的定位符。
 - `#` 在行首是注释；行内注释写成「空格 `#` 空格」，所以 `find #kw` 仍是定位符。
-- 只额外加了三样小东西：`let 变量 = 值` + `${变量}` 插值、`sleep 秒`、`echo 文本`；
-  未定义的 `${x}` 原样保留（JS 模板串不会被误伤）。
+- 变量：`let 变量 = 值` 定义；命令参数里用 `${变量}` 插值（未定义的 `${x}` 原样保留）。
+  值有类型：数字 `3` / `3.14`、字符串（**必须**引号包裹 `"…"`）、列表 `["a", "b"]`、
+  变量引用（裸标识符，未定义报错）；另有 `sleep 秒`、`echo 文本`。
+- 裸词规则全语言统一：裸标识符一律是变量（`find a` → 取变量 a，未定义报错）；
+  含 `: / . # @` 等字符的裸词不可能是变量名，自动当字符串（`find #kw`、`open https://…` 不受影响）；
+  所以 `find "p"`、`attr @1 "id"`、`input @1 "你好"` 这类字面量参数要加引号。
+- 日志：`debug/info/warn/error 消息`（走 stderr，`error` 记一次失败但不中断），
+  `loglevel debug|info|warn|error` 调门槛（默认 info，debug 先藏起来）。
+- 断言：`assert 条件 [消息…]`——不成立打 `[ASSERT]`、记一次失败、继续跑完（收集全部问题）。
+- 分支/循环：`if 条件:` / `elif 条件:` / `else:`、`loop N:`、`for x in ["a", "b"]:`、
+  `for i in range(N):`，一律冒号 + 缩进块（Tab 按 4 列算）；条件里运算符两侧留空格。
+  循环内 `${i}` 是 1 起的计数（`for i in range(N)` 例外：`i` 是取值本身，0 起），出了块自动还原。
+- 表达式（if/elif/assert/loop 头）：比较 `== != < <= > >=`、`in/not in`（子串或列表成员）、
+  `and/or/not`、括号；比较类型敏感（`3 == "3"` 为假）。
+- 例外：echo/日志/assert 的**消息部分**是自由文本，不用加引号，`${}` 插值照常。
+- 嵌套执行：`run 子脚本.hb 参数…`——同进程执行另一个 `.hb` 脚本；参数按类型系统取值
+  （`run lib/login.hb "张三" 3`），子脚本用 `${1}`/`${2}`…（位置参数）、`${argc}`（个数）、
+  `${argv}`（列表，可 `for a in argv:`）取用；子脚本**变量隔离**（互不可见、互不影响），
+  日志门槛与失败计数全局共享；相对路径相对**调用脚本所在目录**解析；嵌套上限 16 层防循环调用。
 - 默认遇错即停并报「第 N 行」（退出码 1）；`@1/@2` 引用、当前标签页在脚本内自然共享。
 - 命令行显式给的 `--port` / `--timeout` 优先于 `#!` 头行（脚本可复用时不用改文件）。
-  需要分支/循环/文本处理时，请直接用 Python 调 happybrowser 库。
+  更复杂的逻辑（函数、文本处理、数据结构）请直接用 Python 调 happybrowser 库。
 
 ## 安装与开发
 
@@ -165,6 +212,8 @@ uv run ruff check      # lint（fork 风格基线已配置忽略项）
 ```
 
 状态：M1-M6 全部完成。迁移指南 `docs/migration.md`；设计 `docs/design.md`。
+编辑器：`.hb` 脚本的 Sublime Text 语法高亮见 `editors/sublime/hb.sublime-syntax`
+（复制到 `Packages/User` 目录即生效）。
 
 ## License
 
