@@ -1,6 +1,6 @@
 [project]
 name = "happybrowser"
-version = "0.2.0"
+version = "0.2.1"
 description = "精简浏览器自动化库：仅 Chromium，仅 ? / Q 查询语法，内嵌改造自 DrissionPage 的 CDP 驱动"
 readme = "README.md"
 # 许可为继承自 DrissionPage 的自定义条款（个人学习/合法非盈利，商用需授权），

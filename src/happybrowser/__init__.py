@@ -23,7 +23,12 @@ from .errors import (BaseError, ElementNotFoundError, AlertExistsError, ContextL
                      StorageError, CookieFormatError, TargetNotFoundError, LocatorError, UnknownError)
 from .settings import Settings
 
-__version__ = '0.1.0'
+# 版本号以 pyproject.toml 为单一来源：安装后读包元数据；直接跑源码树时回退到内置值
+try:
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+    __version__ = _pkg_version('happybrowser')
+except PackageNotFoundError:
+    __version__ = '0.2.1'
 
 __all__ = [
                             'AlertExistsError',
