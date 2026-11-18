@@ -178,6 +178,7 @@ hb --json -e "open https://example.com" -e "find .lnk"   & rem 每行一条 JSON
   值有类型：数字 `3` / `3.14`、字符串（**必须**引号包裹 `"…"`）、列表 `["a", "b"]`、
   变量引用（裸标识符，未定义报错）；另有 `sleep 秒`、`echo 文本`。
 - 裸词规则全语言统一：裸标识符一律是变量（`find a` → 取变量 a，未定义报错）；
+  `true` / `false` 例外（布尔字面量，同名变量优先）；
   含 `: / . # @` 等字符的裸词不可能是变量名，自动当字符串（`find #kw`、`open https://…` 不受影响）；
   所以 `find "p"`、`attr @1 "id"`、`input @1 "你好"` 这类字面量参数要加引号。
 - 日志：`debug/info/warn/error 消息`（走 stderr，`error` 记一次失败但不中断），
@@ -187,7 +188,7 @@ hb --json -e "open https://example.com" -e "find .lnk"   & rem 每行一条 JSON
   `for i in range(N):`，一律冒号 + 缩进块（Tab 按 4 列算）；条件里运算符两侧留空格。
   循环内 `${i}` 是 1 起的计数（`for i in range(N)` 例外：`i` 是取值本身，0 起），出了块自动还原。
 - 表达式（if/elif/assert/loop 头）：比较 `== != < <= > >=`、`in/not in`（子串或列表成员）、
-  `and/or/not`、括号；比较类型敏感（`3 == "3"` 为假）。
+  `and/or/not`、括号；布尔字面量 `true` / `false`（同名变量优先）；比较类型敏感（`3 == "3"` 为假）。
 - 例外：echo/日志/assert 的**消息部分**是自由文本，不用加引号，`${}` 插值照常。
 - 嵌套执行：`run 子脚本.hb 参数…`——同进程执行另一个 `.hb` 脚本；参数按类型系统取值
   （`run lib/login.hb "张三" 3`），子脚本用 `${1}`/`${2}`…（位置参数）、`${argc}`（个数）、

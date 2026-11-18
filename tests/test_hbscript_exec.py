@@ -312,3 +312,17 @@ def test_run_keep_going_collects(capsys, tmp_path):
     assert out == ['子脚本继续', '父脚本继续']   # -c 下子脚本内外都继续跑
     assert '[ASSERT] bad.hb 第 1 行' in err
     assert '1 条命令失败' in err
+
+
+def test_bool_literals(capsys):
+    """true/false 是布尔字面量；同名变量优先（向后兼容）。"""
+    code, out, err = run(capsys, 'let on = true\n'
+                                 'let off = false\n'
+                                 'assert on\n'
+                                 'assert not off\n'
+                                 'if on and not off:\n'
+                                 '    echo 布尔字面量可用\n'
+                                 'let true = "覆盖"\n'
+                                 'echo ${true}\n')
+    assert code == 0, err
+    assert out == ['布尔字面量可用', '覆盖']

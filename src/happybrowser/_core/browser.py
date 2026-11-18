@@ -362,16 +362,40 @@ class Browser(Messenger):
             return
 
         if pids:
-            from psutil import Process
-            for pid in pids:
-                try:
-                    Process(pid).kill()
-                except Exception:
-                    pass
+            try:
+                from psutil import Process   # 可选依赖：没装就走平台 pid 强杀兜底
+            except ImportError:
+                Process = None
+            if Process is not None:
+                for pid in pids:
+                    try:
+                        Process(pid).kill()
+                    except Exception:
+                        pass
+            else:
+                self._kill_pids(pids)
             wait_until(lambda: self._pids_gone(pids), timeout=timeout)
 
         if self._options.auto_port or del_data:
             ensure_del_dir(self._options.user_data_path)
+
+    @staticmethod
+    def _kill_pids(pids):
+        """psutil 缺席时的兜底：按平台强杀（taskkill / SIGKILL）。"""
+        from os import kill
+        from platform import system
+        from subprocess import run as _run, DEVNULL
+        if system().lower() == 'windows':
+            for pid in pids:
+                _run(['taskkill', '/PID', str(pid), '/T', '/F'],
+                     stdout=DEVNULL, stderr=DEVNULL)
+        else:
+            from signal import SIGKILL   # Windows 没有 SIGKILL，只在 POSIX 分支导入
+            for pid in pids:
+                try:
+                    kill(pid, SIGKILL)
+                except OSError:
+                    pass
 
     @staticmethod
     def _pids_gone(pids):
@@ -534,21 +558,60 @@ def _run_browser(options, mode='auto'):
     driver = (Driver(f'ws://{options.address}/devtools/browser/{browser_id}', None) if Settings._debug is None
               else DebugDriver(f'ws://{options.address}/devtools/browser/{browser_id}', None))
 
-    # 无头探测：自己启动 → 启动参数即事实；接管 → product/UA 启发式
-    #（注意：Chrome 新版 headless=new 的 product 已不带 Headless 标记，
-    #  且 --user-agent 反检测覆盖后 UA 也不可见，接管场景只能 best effort）
+    # 无头探测。注意 exists 的语义是「本次是**我们拉起的**」（connect_browser
+    # 接管时返回 None，启动时返回命令行）：
+    #   自己拉起 → 启动参数即事实（options.is_headless）；
+    #   接管      → 只能探测（_probe_headless：浏览器自报命令行 > CLI state 文件
+    #               > UA 启发式 > Options 声明）。
     if exists:
-        is_headless = options.is_headless
+        is_headless = bool(options.is_headless)
     else:
-        ver = driver.run('Browser.getVersion')
-        is_headless = ('headless' in ver.get('product', '').lower()
-                       or 'headless' in ver.get('userAgent', '').lower())
+        is_headless = _probe_headless(driver, options)
 
     info = str(driver.run('Browser.getHistograms'))
     incognito = "'Browser.WindowCount.Incognito'" in info
     guest = "'Browser.WindowCount.Guest'" in info
     browser_id = _get_browser_id(driver, incognito or guest)
     return is_headless, browser_id, command_line, False, driver, incognito, guest, exists
+
+
+def _probe_headless(driver, options):
+    """接管场景判无头（按可靠度降级，纯展示用，不影响行为）：
+
+    1. `Browser.getBrowserCommandLine`——浏览器自报的启动参数，最权威
+       （Chrome 只在带 --enable-automation 时才允许读，否则报错）；
+    2. `~/.happybrowser/state_{port}.json` 的 `headless` 字段——CLI/hbh 起的
+       实例都会记，`hb --headless` 复用同一只浏览器时正好命中；
+    3. UA 里的 Headless 标记——headless=new 的 product 已不带宽，且
+       opts.headless() 会覆盖 UA，所以退居兜底；
+    都认不出来就返回 False（= 确认不了）。**不要**用调用方的 `options.is_headless`
+    兜底——那是「我希望它无头」而不是「它是无头」，`hb --headless --existing`
+    正是靠这个 False 决定「确认不了就不接管」。
+    """
+    try:
+        argv = driver.run('Browser.getBrowserCommandLine').get('arguments') or []
+        if argv:
+            return any('--headless' in str(a) for a in argv)
+    except Exception:
+        pass
+    port = str(getattr(options, 'address', '')).rsplit(':', 1)[-1]
+    if port.isdigit():
+        try:
+            from pathlib import Path
+            import json
+            f = Path.home() / '.happybrowser' / f'state_{port}.json'
+            flag = json.loads(f.read_text(encoding='utf-8')).get('headless')
+            if isinstance(flag, bool):
+                return flag
+        except Exception:
+            pass
+    try:
+        ua = driver.run('Browser.getVersion').get('userAgent', '')
+        if 'headless' in ua.lower():
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _get_browser_id(driver, incognito):
