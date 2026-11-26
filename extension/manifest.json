@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "hb 录制器",
+  "short_name": "hb 录制器",
+  "description": "记录浏览器操作并生成 hb（happybrowser）脚本：自动挑稳定的定位符、认不出时请父级节点当锚点，还能点选元素抓取内容。",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["sidePanel", "storage", "downloads", "webNavigation"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["lib/locator.js", "lib/recorder-core.js", "content.js"],
+      "css": ["content.css"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "action": {
+    "default_title": "hb 录制器：开始 / 停止录制（Alt+Shift+R）",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "commands": {
+    "toggle-recording": {
+      "suggested_key": { "default": "Alt+Shift+R" },
+      "description": "开始 / 停止录制当前标签页"
+    },
+    "pick-content": {
+      "suggested_key": { "default": "Alt+Shift+C" },
+      "description": "点选页面元素，把它的文本 / 属性抓进脚本"
+    }
+  }
+}

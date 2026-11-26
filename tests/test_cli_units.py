@@ -2,7 +2,8 @@
 """cli.py 纯函数单测：@n 引用链解析（不需要浏览器）。"""
 import pytest
 
-from happybrowser.cli import _CliError, _parse_ref_chain
+from happybrowser.cli import _CliError, _parse_keys, _parse_ref_chain
+from happybrowser._core.keys import Keys
 
 
 @pytest.mark.parametrize('target, expected', [
@@ -40,3 +41,18 @@ def test_not_a_ref_chain(target):
 def test_bad_chain(target):
     with pytest.raises(_CliError):
         _parse_ref_chain(target)
+
+
+@pytest.mark.parametrize('text, expected', [
+    ('Enter', (Keys.ENTER,)), ('escape', (Keys.ESCAPE,)), ('ArrowDown', (Keys.DOWN,)),
+    ('shift+Tab', (Keys.SHIFT, Keys.TAB)), ('Ctrl+a', (Keys.CTRL, 'a')), ('ctrl+shift+ArrowUp', (Keys.CTRL, Keys.SHIFT, Keys.UP)),
+    ('F5', (Keys.F5,)), (' ', (' ',)), ('ctrl++', (Keys.CTRL, '+')),
+])
+def test_parse_keys(text, expected):
+    assert _parse_keys(text) == expected
+
+
+@pytest.mark.parametrize('text', ['ctrlx+a', 'win+a', 'shift++ctrl+a'])
+def test_parse_keys_bad_modifier(text):
+    with pytest.raises(_CliError):
+        _parse_keys(text)

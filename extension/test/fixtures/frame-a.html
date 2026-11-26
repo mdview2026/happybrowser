@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>frame a</title>
+<style>iframe { width: 120px; height: 40px; }</style></head>
+<body style="margin:4px">
+<button id="fa-btn" class="act"
+  onclick="parent.log('frame-a ' + (window.frameElement.id || window.frameElement.className))">A 按钮</button>
+<input id="fa-input" placeholder="frame 输入" oninput="parent.log('fa-input ' + this.value)">
+<iframe class="inner" src="frame-b.html" title="inner"></iframe>
+<iframe class="cross" src="http://localhost:__PORT__/frame-x.html" title="cross"></iframe>
+</body></html>

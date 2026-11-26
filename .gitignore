@@ -20,6 +20,7 @@ tmp/
 .idea/
 .vscode/
 Thumbs.db
+~/
 
 # 内部需求工作流文档（不随公开仓库分发）
 .requirements/

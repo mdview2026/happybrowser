@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>hb 录制器</title>
+<link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo" id="logo"></span><h1>hb 录制器</h1></div>
+  <div class="actions">
+    <button id="btn-record" class="rec" title="开始 / 停止录制当前标签页（Alt+Shift+R）"><i></i><span>开始录制</span></button>
+    <button id="btn-pick" title="点选页面元素，把它的文本 / 属性抓进脚本（Alt+Shift+C）">⎙ 抓取内容</button>
+  </div>
+  <div id="status" class="status">读取中…</div>
+</header>
+
+<div id="pick-draft" class="draft" hidden>
+  <div class="draft-head"><b>已选取</b> <span id="pick-desc"></span><button id="pick-cancel" class="link" title="重新选取">重新选取</button></div>
+  <div class="mono small" id="pick-plan"></div>
+  <div class="grid">
+    <label>抓取</label>
+    <div class="radios" id="pick-what">
+      <label><input type="radio" name="pwhat" value="text" checked>文本</label>
+      <label><input type="radio" name="pwhat" value="attr">属性</label>
+      <select id="pick-attr" size="1"></select>
+      <label><input type="radio" name="pwhat" value="html">HTML</label>
+    </div>
+    <label>范围</label>
+    <div class="radios" id="pick-scope">
+      <label><input type="radio" name="pscope" value="one" checked>仅此元素</label>
+      <label id="pick-all-label"><input type="radio" name="pscope" value="all">全部同类（<span id="pick-all-n">0</span> 项）</label>
+    </div>
+  </div>
+  <div class="row right">
+    <button id="pick-add" class="primary">加入脚本</button>
+  </div>
+</div>
+
+<nav class="tabs">
+  <button data-tab="steps" class="on">步骤 <span id="step-count" class="badge">0</span></button>
+  <button data-tab="script">脚本</button>
+  <span class="spacer"></span>
+  <label class="opt" title="每条命令行尾用 # 说明这一步在做什么"><input type="checkbox" id="opt-comments" checked>注释</label>
+  <label class="opt" title="先 find 再用 @1 操作（关掉则定位符直接内联进 click 等命令）"><input type="checkbox" id="opt-find" checked>先 find</label>
+  <label class="opt" title="密码框的内容不记录，脚本里留 ********"><input type="checkbox" id="opt-mask" checked>隐藏密码</label>
+</nav>
+
+<main>
+  <section id="tab-steps" class="tab on">
+    <div id="steps" class="steps"><div class="empty">还没有步骤。<br>点「开始录制」，然后像平时一样操作页面。</div></div>
+  </section>
+  <section id="tab-script" class="tab">
+    <pre id="script" class="script"></pre>
+  </section>
+</main>
+
+<aside id="editor" class="editor" hidden></aside>
+
+<footer>
+  <button id="btn-note" title="在脚本里插一行说明">＋ 说明</button>
+  <button id="btn-sleep" title="在脚本里插一行 sleep（等页面加载 / 动画）">＋ 等待</button>
+  <button id="btn-clear" class="danger" title="清空全部步骤">清空</button>
+  <span class="spacer"></span>
+  <button id="btn-copy">复制脚本</button>
+  <button id="btn-save" class="primary">保存 .hb</button>
+</footer>
+
+<script src="lib/hbgen.js"></script>
+<script src="sidepanel.js"></script>
+</body>
+</html>

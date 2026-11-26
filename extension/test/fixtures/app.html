@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>hb-recorder 回放测试</title>
+<style>
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  fieldset { margin: 8px 0; }
+  iframe { width: 260px; height: 90px; }
+</style>
+</head>
+<body onkeydown="if(event.target===this){log('body-key ' + event.key)}">
+<pre id="log"></pre>
+
+<fieldset id="f-search"><legend>搜索</legend>
+  <input id="q" name="q" type="search" placeholder="搜索关键词">
+  <button id="btn-search" class="btn primary" onclick="log('search ' + document.getElementById('q').value)">
+    <span class="icon">🔍</span>搜索</button>
+  <input id="q-form" name="qf" placeholder="回车提交" onkeydown="if(event.key==='Enter'){log('enter ' + this.value)}">
+</fieldset>
+
+<fieldset id="f-list"><legend>列表</legend>
+  <ul id="items">
+    <li class="item" data-id="1"><span class="name">苹果</span><button class="del" onclick="log('del 1')">删除</button></li>
+    <li class="item" data-id="2"><span class="name">香蕉</span><button class="del" onclick="log('del 2')">删除</button></li>
+    <li class="item" data-id="3"><span class="name">樱桃</span><button class="del" onclick="log('del 3')">删除</button></li>
+  </ul>
+</fieldset>
+
+<fieldset id="f-form"><legend>表单</legend>
+  <label for="sel">城市</label>
+  <select id="sel" name="city" onchange="log('select ' + this.value)">
+    <option value="bj">北京</option><option value="sh">上海</option><option value="7">七天</option>
+  </select>
+  <label class="chk"><input type="checkbox" id="agree" class="visually-hidden" onchange="log('agree ' + this.checked)"> 同意</label>
+  <label class="chk"><input type="checkbox" id="visible-check" onchange="log('visible ' + this.checked)"> 可见的勾选框</label>
+  <input type="password" id="pwd" name="pwd" oninput="log('pwd ' + this.value)">
+  <textarea id="bio" oninput="log('bio ' + this.value)"></textarea>
+  <input type="radio" id="r1" name="plan" value="a" onchange="log('radio a')"><label for="r1">A 方案</label>
+  <input type="radio" id="r2" name="plan" value="b" onchange="log('radio b')"><label for="r2">B 方案</label>
+  <div id="kbd" tabindex="0" onkeydown="log('key ' + event.key + (event.ctrlKey ? '+ctrl' : ''))">键盘区</div>
+  <div id="shortcut" tabindex="0" onkeydown="if(event.ctrlKey && event.key==='s'){event.preventDefault(); log('ctrl-s')}">快捷键区</div>
+</fieldset>
+
+<fieldset id="f-table"><legend>表格</legend>
+  <table id="t">
+    <tr class="row"><td class="cell">row</td><td><button class="go" onclick="log('go 1')">go</button></td></tr>
+    <tr class="row"><td class="cell">row</td><td><button class="go" onclick="log('go 2')">go</button></td></tr>
+    <tr class="row"><td class="cell">row</td><td><button class="go" onclick="log('go 3')">go</button></td></tr>
+  </table>
+</fieldset>
+
+<fieldset id="f-link"><legend>链接</legend>
+  <a id="hash-link" href="#/page2" onclick="log('hash-link')">第二页</a>
+  <a id="push-link" href="#" onclick="event.preventDefault(); history.pushState({}, '', '?p=2'); log('push')">pushState</a>
+</fieldset>
+
+<fieldset id="f-frame"><legend>iframe</legend>
+  <iframe id="pane" src="frame-a.html" title="pane"></iframe>
+  <iframe class="second" src="frame-a.html" title="second"></iframe>
+</fieldset>
+
+<shadow-btn id="sb"></shadow-btn>
+<script>
+  function log(s) { document.getElementById('log').textContent += s + '\n'; }
+  customElements.define('shadow-btn', class extends HTMLElement {
+    connectedCallback() {
+      const sr = this.attachShadow({mode: 'open'});
+      sr.innerHTML = '<button id="in-shadow" onclick="this.getRootNode().host.getRootNode().getElementById(\'log\').textContent += \'shadow\n\'">shadow</button>';
+    }
+  });
+</script>
+</body>
+</html>

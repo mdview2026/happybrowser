@@ -196,8 +196,13 @@ class Frame(PageBase):
 
     def _stop_messenger(self):
         super()._stop_messenger()
-        if self._is_diff_domain and self._frame_id in str(
-                self.tab._run_cdp('Page.getFrameTree', _ignore=True)):
+        if not self._is_diff_domain:
+            return
+        try:
+            still_there = self._frame_id in str(self.tab._run_cdp('Page.getFrameTree', _ignore=True))
+        except PageDisconnectedError:
+            return          # 标签页已经先停了（Browser.quit 的顺序）：没什么可重建的，别把退出流程打断
+        if still_there:
             self._do_reload()
 
     # ----------挂件----------

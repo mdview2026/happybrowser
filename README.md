@@ -64,6 +64,8 @@ hb text "@2 >> .price"              & rem 在第 2 个匹配里继续找：>> �
 hb attr "@2 parent" id              & rem 方向轴：parent / next / prev（可 parent(2)、next(.btn)）
 hb click "@1"                        & rem 按引用点击（也可 hb click "#kw"）
 hb input "@1" "关键词"               & rem 清空后输入
+hb press "@1" Enter                  & rem 按键：Enter / Tab / Escape / ArrowDown / ctrl+a（发真实按键事件）
+hb select "#city" "上海" --by value    & rem 下拉框选择：默认按选项文本，--by value / --by index
 hb text "#result"                    & rem 读文本；attr/html/js/shot/url/tabs 同理
 hb find "a && .lnk" --json           & rem --json 放前放后都行，输出结构化结果（AI 友好）
 hb hl                                & rem 高亮 find 缓存的全部 @n（看清到底匹配了哪些）
@@ -82,6 +84,8 @@ hb                                   & rem 不带参数 → 打印帮助（退�
 支持多级（`@2 >> .body > .price`）；也可以先用方向轴移动：`@2 parent`（父元素）、
 `@2 next` / `@2 prev`（兄弟元素），带参数表示层数/序号/定位符（`parent(2)`、`next(2)`、`next(.btn)`），
 再继续接 `>>` / `>`；链式结果同样可直接作为 click/input/text/hl 的目标。
+`@n` 指向 iframe 时，`>>` / `>` 会进入那个 frame 的文档里找（同域、跨域都行，引用复活时自动包装成
+Frame 对象）；在 frame 里找到的引用，后续 text / input / press 照常可用。
 高亮用 `outline`（不占布局、不挤动页面），元素原有的内联 outline 会先备份在页面侧，
 `hb nohl` 原样还原；典型用法是 `hb find …` → `hb hl` → `hb shot` 截图确认。
 `hb --help` 看全部子命令。
@@ -196,6 +200,36 @@ hb --json -e "open https://example.com" -e "find .lnk"   & rem 每行一条 JSON
 - 默认遇错即停并报「第 N 行」（退出码 1）；`@1/@2` 引用、当前标签页在脚本内自然共享。
 - 命令行显式给的 `--port` / `--timeout` 优先于 `#!` 头行（脚本可复用时不用改文件）。
   更复杂的逻辑（函数、文本处理、数据结构）请直接用 Python 调 happybrowser 库。
+
+## 浏览器扩展：录制器（`extension/`）
+
+Chrome 扩展，录下你在页面上的操作，生成能直接 `hb run` 的 `.hb` 脚本：点工具栏按钮（或 `Alt+Shift+R`）
+开始 / 停止，侧边栏里看步骤、换定位符、抓取内容，保存成 `.hb`。
+
+- **定位符**：`#id` / `@data-testid` / `@name` 优先，其次稳定的 class、`placeholder` / `aria-label`、标签文字；
+  自动生成的 class（`css-1q2w3e`、`sc-…`）、状态类（`active`、`disabled`）、自动编号的 id 不用。
+- **父级锚点**：目标自己认不出来（一排相同的按钮）时，自动挑一个认得出的祖先当锚点：
+  `find "@data-id=42"` → `click "@1 >> button && .del"`；实在没有特征的才退到 `find … --index n`。
+  侧边栏里可以换成备选方案。
+- **抓取内容**：`Alt+Shift+C` 点选元素，抓文本 / 属性 / HTML；「全部同类」生成 `find … --all` + `loop` 循环。
+- **iframe**：iframe 里的操作生成 `find "<iframe>"` → `find "@1 >> …"` 链，同域 / 跨域都能回放。
+
+```hb
+# hb 录制脚本 · 示例站
+open "https://example.com/"
+find "#kw"  # 1. 输入 input#kw「搜索」 = "关键词"
+input @1 "关键词"
+press @1 "Enter"  # 2. 在 input#kw 上按 Enter
+find "@data-id=42"  # 3. 点击 button「删除」
+click "@1 >> button && .del"
+find "tr && .row" --all  # 4. 抓取全部同类（12 项）：td「标题」
+loop 12:
+    text "@${i} >> td && .title"  # td「标题」
+```
+
+加载方式：`chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」→ 选 `extension/`。
+详见 [`extension/README.md`](extension/README.md)；测试 `pytest tests/test_recorder.py`
+（真实 Chromium：定位方案逐个用 hb 验证、录制后回放比对页面日志）。
 
 ## 安装与开发
 

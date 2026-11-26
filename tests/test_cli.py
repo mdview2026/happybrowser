@@ -31,14 +31,33 @@ HTML = '''<!DOCTYPE html><html><head><title>hb-cli 测试页</title></head><body
 <div id="wrap"><ul id="list">
 <li class="row" id="r1">1</li><li class="row" id="r2">2</li><li class="row" id="r3">3</li>
 </ul></div>
+<form id="f2" onsubmit="document.getElementById('out').textContent='submitted '+document.getElementById('q2').value;return false">
+<input id="q2" name="kw2" placeholder="Second">
+</form>
+<select id="sel" name="city" onchange="document.getElementById('out').textContent='city '+this.value">
+<option value="bj">北京</option><option value="sh">上海</option>
+</select>
+<div id="keys" tabindex="0" onkeydown="if(event.key==='ArrowDown')document.getElementById('out').textContent='moved'+(event.ctrlKey?' ctrl':'')"></div>
+<iframe id="frm" src="frame.html" title="inner"></iframe>
+<iframe id="xfrm" src="http://localhost:__PORT__/x.html" title="cross"></iframe>
 </body></html>'''
+
+FRAME_HTML = '''<!DOCTYPE html><html><body style="margin:0">
+<button id="in-btn" onclick="parent.document.getElementById('out').textContent='frame click'">inner</button>
+<iframe id="frm2" src="frame2.html" style="width:300px;height:80px"></iframe>
+</body></html>'''
+
+FRAME2_HTML = '<button id="in-btn2" onclick="top.document.getElementById(\'out\').textContent=\'frame2 click\'">deep</button>'
+X_HTML = '<button id="x-btn" onclick="document.getElementById(\'x-out\').textContent=\'x clicked\'">x</button><p id="x-out"></p>'
 
 
 @pytest.fixture(scope='module')
 def server():
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            body = HTML.encode()
+            route = self.path.split('?', 1)[0]
+            text = {'/frame.html': FRAME_HTML, '/frame2.html': FRAME2_HTML, '/x.html': X_HTML}.get(route, HTML)
+            body = text.replace('__PORT__', str(self.server.server_address[1])).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
@@ -175,6 +194,100 @@ def test_explain_without_browser():
                        capture_output=True, text=True, encoding='utf-8', timeout=60)
     assert r.returncode == 0
     assert 'pure-xpath' in r.stdout and '@placeholder' in r.stdout
+
+
+# ----------------------------------------------------------------press / select / iframe 引用链
+
+def test_press(port, server):
+    """press 发真实按键事件：Enter 触发表单隐式提交，修饰键组合能到页面监听。"""
+    hb(port, 'open', server)
+    hb(port, 'find', '#q2')
+    hb(port, 'input', '@1', 'abc')
+    hb(port, 'press', '@1', 'Enter')                 # 表单只有一个文本框 → 隐式提交 → onsubmit
+    assert hb(port, 'text', '#out') == 'submitted abc'
+    hb(port, 'press', '#keys', 'ArrowDown')          # 定位符直连；页面 keydown 监听收到方向键
+    assert hb(port, 'text', '#out') == 'moved'
+    hb(port, 'press', '#keys', 'ctrl+ArrowDown')
+    assert hb(port, 'text', '#out') == 'moved ctrl'
+    assert json.loads(hb(port, 'press', 'body', 'Tab', '--json')) == {'pressed': 'Tab', 'target': 'body'}
+    hb(port, 'press', '#keys', 'ctrlx+a', expect_fail=True)   # 未知修饰键
+    hb(port, 'select', '#q2', '上海', expect_fail=True)       # select 只能用于 <select>
+
+
+def test_select(port, server):
+    hb(port, 'open', server)
+    hb(port, 'find', '#sel')
+    assert hb(port, 'select', '@1', '上海') == '上海'         # 默认按选项文本
+    assert hb(port, 'text', '#out') == 'city sh'
+    hb(port, 'select', '#sel', '1', '--by', 'index')          # 序号 1 起
+    assert hb(port, 'text', '#out') == 'city bj'
+    hb(port, 'select', '#sel', 'sh', '--by', 'value')
+    assert hb(port, 'text', '#out') == 'city sh'
+    hb(port, '--timeout', '1', 'select', '#sel', '不存在', expect_fail=True)   # 找不到选项要等满超时
+
+
+def test_ref_chain_enters_iframes(port, server):
+    """@1 >> … 能进 iframe：同域、嵌套同域、以及跨域（OOPIF，localhost ≠ 127.0.0.1）。"""
+    hb(port, 'open', server)
+    tab = Browser.attach(port).latest_tab
+    tab.ele('#frm').wait.doc_loaded()
+    tab.ele('#xfrm').wait.doc_loaded()
+    hb(port, 'find', '#frm')
+    hb(port, 'click', '@1 >> #in-btn')
+    assert hb(port, 'text', '#out') == 'frame click'
+    hb(port, 'find', '#frm')
+    hb(port, 'find', '@1 >> #frm2')                  # 进一层再找里层的 iframe
+    hb(port, 'click', '@1 >> #in-btn2')
+    assert hb(port, 'text', '#out') == 'frame2 click'
+    hb(port, 'find', '#xfrm')
+    hb(port, 'click', '@1 >> #x-btn')                # 跨域 frame
+    assert hb(port, 'find', '@1 >> #x-out') and hb(port, 'text', '@1') == 'x clicked'
+
+
+def test_ref_chain_enters_oopif():
+    """真·跨进程 iframe（跨站 + 开着站点隔离）：引用复活后包装成 Frame，@1 >> … 走 frame 自己的 target。
+
+    hb 默认启动参数关了站点隔离，所以这里单独起一只不关的；127.0.0.2 与 127.0.0.1 是不同的站。
+    """
+    top = '<iframe id="x" style="width:200px;height:60px" src="http://127.0.0.2:__PORT__/x.html"></iframe>'
+    x = '<button id="x-btn" onclick="document.getElementById(\'o\').textContent=\'oopif-ok\'">x</button><p id="o"></p>'
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = (top if self.path.startswith('/top') else x).replace('__PORT__', str(self.server.server_address[1])).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(('0.0.0.0', 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f'http://127.0.0.1:{srv.server_address[1]}/top.html'
+    opts = Options()
+    opts.auto_port = True
+    opts.set_argument('--headless=new')
+    opts.set_argument('--no-sandbox')
+    opts.remove_argument('--disable-site-isolation-trials')
+    b = Browser(opts)
+    b.new_tab('about:blank')
+    port = int(b.address.split(':')[1])
+    try:
+        hb(port, 'open', url)
+        assert b.latest_tab.ele('#x')._is_diff_domain is True      # 确认真的是跨进程 frame
+        hb(port, 'find', '#x')
+        hb(port, 'click', '@1 >> #x-btn')
+        hb(port, 'find', '@1 >> #o')
+        assert hb(port, 'text', '@1') == 'oopif-ok'
+    finally:
+        try:
+            b.quit()          # 进程里持有跨进程 Frame 对象时也要能干净退出（Frame._stop_messenger 不再打断 quit）
+        finally:
+            (Path.home() / '.happybrowser' / f'state_{port}.json').unlink(missing_ok=True)
+            srv.shutdown()
 
 
 # ----------------------------------------------------------------.hb 脚本

@@ -10,6 +10,8 @@
     hb attr "@2 parent" id              # 方向轴：parent / next / prev；next(2)、next(.btn) 也行
     hb click "@1"                        # 按引用点击（也可直接 hb click "#kw"）
     hb input "@1" "关键词"               # 清空后输入
+    hb press "@1" Enter                  # 按键：Enter / Tab / Escape / ArrowDown / ctrl+a …
+    hb select "#city" "上海" --by value    # 下拉框选择（默认按选项文本；--by value / --by index）
     hb text "#result"                    # 读文本；attr/html/js/shot 同理
     hb hl / hb hl "@1"                   # 高亮（无参=高亮 find 缓存的所有引用；nohl 取消）
     hb tabs / hb tab <id前缀>            # 标签页列表与切换
@@ -49,8 +51,9 @@ from requests import Session
 
 from . import Options, __version__, explain_loc
 from ._core.browser import Browser
+from ._core.keys import Keys, keys_to_typing, send_key
 from ._core.tools import port_is_using
-from ._elements.element import Element
+from ._elements.element import Element, _get_node_by_backend_id
 from ._elements.none_element import NoneElement
 from .errors import BaseError
 from .hbscript import (LOG_LEVELS, Assert, For, If, ListLit, Loop, ScriptError,
@@ -103,15 +106,34 @@ class _CliError(Exception):
 # ----------------------------------------------------------------浏览器与定位
 
 def _ele_brief(ele):
+    # iframe/frame/object 查到即被包装成 Frame 对象：摘要取它的 <iframe> 元素本身
+    if getattr(ele, '_type', None) == 'Frame':
+        ele = ele.frame_ele
     text = (ele.text or '').replace('\n', ' ').strip()
     return {'tag': ele.tag, 'id': ele.attr('id'),
             'text': text[:_TEXT_SNIPPET] + ('…' if len(text) > _TEXT_SNIPPET else '')}
 
 
+def _ref_owners(ele):
+    """元素所在的 iframe 链：由外到内各层宿主元素的 backendNodeId（顶层元素为 []）。
+
+    跨进程 iframe（真实 Chrome 默认开站点隔离，跨站 iframe 都是）里的节点只属于那个 frame 的
+    target：把引用绑在顶层标签页上，下一条 text/input 就会报「不属于本文档」。"""
+    hosts = []
+    owner = ele.owner
+    while getattr(owner, '_type', None) == 'Frame':
+        host = owner.frame_ele
+        hosts.append(host._backend_id)
+        owner = host.owner
+    hosts.reverse()
+    return hosts
+
+
 def _save_refs(ctx, eles):
     ctx.state['tab_id'] = ctx.tab.tab_id
     ctx.state['url'] = ctx.tab.url
-    ctx.state['refs'] = [{'backend_id': e._backend_id, **_ele_brief(e)} for e in eles[:_MAX_REFS]]
+    ctx.state['refs'] = [{'backend_id': e._backend_id, 'owners': _ref_owners(e), **_ele_brief(e)}
+                        for e in eles[:_MAX_REFS]]
     _save_state(ctx.port, ctx.state)
 
 
@@ -127,8 +149,11 @@ def _revive_ref(ctx, target):
     ref = refs[index - 1]
     if ctx.state.get('tab_id') != ctx.tab.tab_id:
         return None, '引用属于另一个标签页，请在本页重新 find'
-    ele = Element(ctx.tab, backend_id=ref['backend_id'])  # 三 id 懒互转，构造零开销
     try:
+        page = ctx.tab
+        for host_id in ref.get('owners', ()):      # 按存下的链逐层重建 Frame 对象
+            page = _as_frame(Element(page, backend_id=host_id))
+        ele = Element(page, backend_id=ref['backend_id'])  # 三 id 懒互转，构造零开销
         _ = ele.tag  # 触发一次 describeNode，验证节点还活着
     except BaseError:
         return None, f'引用 {target} 已失效（页面大概跳转过），请重新 find'
@@ -138,6 +163,16 @@ def _revive_ref(ctx, target):
 _REF_HEAD = re.compile(r'^@(\d+)')
 _AXIS_NAMES = ('parent', 'next', 'prev')
 _AXIS_RE = re.compile(r'(parent|next|prev)(?![A-Za-z0-9_.\-])')
+_FRAME_TAGS = ('iframe', 'frame', 'object')
+
+_MODIFIERS = {'ctrl': Keys.CTRL, 'control': Keys.CTRL, 'alt': Keys.ALT, 'shift': Keys.SHIFT,
+              'meta': Keys.META, 'cmd': Keys.META}
+_NAMED_KEYS = {'enter': Keys.ENTER, 'return': Keys.RETURN, 'tab': Keys.TAB, 'escape': Keys.ESCAPE,
+               'esc': Keys.ESCAPE, 'backspace': Keys.BACKSPACE, 'delete': Keys.DELETE, 'del': Keys.DELETE,
+               'space': Keys.SPACE, 'up': Keys.UP, 'down': Keys.DOWN, 'left': Keys.LEFT, 'right': Keys.RIGHT,
+               'pageup': Keys.PAGE_UP, 'pagedown': Keys.PAGE_DOWN, 'home': Keys.HOME, 'end': Keys.END,
+               'arrowup': Keys.UP, 'arrowdown': Keys.DOWN, 'arrowleft': Keys.LEFT, 'arrowright': Keys.RIGHT}
+_NAMED_KEYS.update({f'f{i}': getattr(Keys, f'F{i}') for i in range(1, 13)})
 
 
 def _consume_parens(s):
@@ -227,6 +262,16 @@ def _ref_step(ele, kind, arg, timeout):
     return method(arg, timeout=timeout)
 
 
+def _as_frame(ele):
+    """iframe/frame/object 元素 → Frame 对象（与 find 首次查到时的包装一致）。
+
+    引用复活出来的是普通 Element，`>>` 只能走 this.contentDocument（仅同域）；
+    包装成 Frame 后同域、异域（OOPIF）都能进到 frame 文档里查找。"""
+    if ele.tag not in _FRAME_TAGS:
+        return ele
+    return _get_node_by_backend_id(ele.owner, ele._backend_id) or ele
+
+
 def _revive_target(ctx, target):
     """@n 或 @n 链 → (ele, None)；非引用链 → (None, None)；失败 → (None, 原因)。"""
     try:
@@ -239,6 +284,8 @@ def _revive_target(ctx, target):
     ele, err = _revive_ref(ctx, ref)
     if err:
         return None, err
+    if steps and steps[0][0] in ('>>', '>'):
+        ele = _as_frame(ele)
     for kind, arg in steps:
         try:
             ele = _ref_step(ele, kind, arg, ctx.timeout)
@@ -261,6 +308,8 @@ def _find_matches(ctx, locator):
     ele, err = _revive_ref(ctx, ref)
     if err:
         return [], err
+    if steps and steps[0][0] in ('>>', '>'):
+        ele = _as_frame(ele)
     if not steps:
         return [ele], None
     for kind, arg in steps[:-1]:
@@ -376,6 +425,51 @@ def cmd_input(ctx, a):
     ele.input(a.text, clear=True)
     val = ele.property('value') or ''
     _out(ctx, {'input': a.target, 'value': val}, f'已输入 → {val!r}')
+
+
+def _parse_keys(text):
+    """'ctrl+a' → (Keys.CTRL, 'a')；'Enter' → (Keys.ENTER,)；'ctrl++' → (Keys.CTRL, '+')。"""
+    parts = re.split(r'(?<!\+)\+', text)      # 末尾的 '+'（如 ctrl++）是加号键本身，不当分隔符
+    key = parts.pop()
+    if key == '':
+        key = '+'
+    mods = []
+    for part in parts:
+        mod = _MODIFIERS.get(part.lower())
+        if mod is None:
+            _fail(f'未知的修饰键：{part!r}（可用 ctrl / alt / shift / meta）')
+        mods.append(mod)
+    return (*mods, _NAMED_KEYS.get(key.lower(), key))
+
+
+def cmd_press(ctx, a):
+    """在目标上按键。走真实按键事件（Input.dispatchKeyEvent），不是 insertText：
+    页面的 keydown 监听、表单隐式提交、快捷键都收得到。"""
+    ele = _resolve(ctx, a.target, 'press')
+    modifier, keys = keys_to_typing(_parse_keys(a.keys))
+    if not keys:
+        _fail(f'没有可按的键：{a.keys!r}')
+    if ele.tag == 'body':
+        # 页面级按键（录制器在“谁都没焦点”时生成的写法）：焦点可能还在 iframe 里，
+        # DOM.focus(body) 拉不回来，先让当前焦点元素失焦
+        ele._run_js('if (document.activeElement && document.activeElement !== this) document.activeElement.blur();'
+                    'return true;')
+    ele._input_focus()
+    for key in keys:
+        send_key(ele.owner, modifier, '\n' if key == Keys.ENTER else key)
+    _out(ctx, {'pressed': a.keys, 'target': a.target}, f'已按下 {a.keys}（{a.target}）')
+
+
+def cmd_select(ctx, a):
+    """下拉框选择：默认按选项文本，--by value 按 option 的 value，--by index 按序号（1 起）。"""
+    ele = _resolve(ctx, a.target, 'select')
+    if ele.tag != 'select':
+        _fail(f'select 只能用于 <select> 元素，目标是 <{ele.tag}>')
+    choose = getattr(ele.select, f'by_{a.by}')
+    for value in a.values:
+        choose(int(value) if a.by == 'index' else value)
+    picked = [o.text for o in ele.select.selected_options]
+    _out(ctx, {'selected': picked, 'by': a.by}, ' → '.join(picked) if picked else '未选中任何选项')
 
 
 def cmd_text(ctx, a):
@@ -1081,6 +1175,18 @@ def _build_parser():
         elif name == 'attr':
             p.add_argument('name', help='属性名')
         p.set_defaults(fn=globals()[f'cmd_{name}'])
+
+    p = sub.add_parser('press', help='按键：Enter / Tab / Escape / ArrowDown / ctrl+a …', parents=[common])
+    p.add_argument('target', help='定位符或 @n 引用（按键前先聚焦它；页面级快捷键用 body）')
+    p.add_argument('keys', help='键名，组合键用 + 连接：Enter、shift+Tab、ctrl+a')
+    p.set_defaults(fn=cmd_press)
+
+    p = sub.add_parser('select', help='下拉框选择（默认按选项文本）', parents=[common])
+    p.add_argument('target', help='定位符或 @n 引用（须是 select 元素）')
+    p.add_argument('values', nargs='+', help='选项文本；--by value 时是 option 的 value，'
+                                             '--by index 时是序号（1 起）；多选框可给多个')
+    p.add_argument('--by', choices=('text', 'value', 'index'), default='text', help='按什么匹配选项')
+    p.set_defaults(fn=cmd_select)
 
     p = sub.add_parser('js', help='在当前页执行 JS', parents=[common])
     p.add_argument('code')
