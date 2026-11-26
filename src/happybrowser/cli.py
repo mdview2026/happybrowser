@@ -823,8 +823,13 @@ def _sticky_options(ctx, tokens, ns):
 class _ScriptEnv:
     """一段脚本的执行状态：变量、失败计数、日志门槛、嵌套 run 信息。"""
 
-    def __init__(self):
-        self.variables = {}
+    def __init__(self, script_args=None):
+        # 顶层脚本也有 argc/argv（空表）：否则可复用脚本没法先判断「有没有传参」
+        # （argv 只在 run 子脚本里定义的话，if argc == 0 会报变量未定义）
+        p = list(script_args or [])
+        self.variables = {str(k): v for k, v in enumerate(p, 1)}
+        self.variables['argc'] = len(p)
+        self.variables['argv'] = p
         self.failures = 0
         self.log_level = LOG_LEVELS['info']
         self.name = ''                  # 当前脚本名（报错定位；嵌套 run 时切换）
@@ -1064,9 +1069,9 @@ def _exec_command(ctx, ap, cmd, args, env):
         ctx.json, ctx.timeout = saved
 
 
-def _exec_script(ctx, ap, script, args):
+def _exec_script(ctx, ap, script, args, script_args=None):
     """遍历 AST 执行；错误带行号，默认遇错即停（-c 继续），结尾汇总失败条数。"""
-    env = _ScriptEnv()
+    env = _ScriptEnv(script_args)
     if script.path:   # 文件脚本：记录名字与目录（嵌套 run 的相对路径基准）
         p = Path(script.path).resolve()
         env.name, env.base_dir = p.name, p.parent
@@ -1081,7 +1086,7 @@ def _exec_script(ctx, ap, script, args):
     return 1 if env.failures else 0
 
 
-def _run_source(ap, args, name, text, explicit=()):
+def _run_source(ap, args, name, text, explicit=(), script_args=None):
     """跑一段脚本源码（来自文件 / stdin / -e 参数）。"""
     try:
         script = parse_script(text)
@@ -1093,19 +1098,21 @@ def _run_source(ap, args, name, text, explicit=()):
     _apply_header(ap, script, ctx, name)
     try:
         _connect(ctx)
-        return _exec_script(ctx, ap, script, args)
+        return _exec_script(ctx, ap, script, args, script_args)
     finally:
         _close(ctx)
 
 
 def _run_script(ap, args, explicit=()):
+    # `hb run x.hb 参数…`：位置参数进顶层 ${1}/${2}…/argc/argv（与嵌套 run 同语义）
+    script_args = list(getattr(args, 'script_args', None) or [])
     if args.file == '-':
-        return _run_source(ap, args, 'stdin', sys.stdin.read(), explicit)
+        return _run_source(ap, args, 'stdin', sys.stdin.read(), explicit, script_args)
     try:
         text = Path(args.file).read_text(encoding='utf-8-sig')
     except OSError as e:
         _fail(f'读取脚本失败：{e}')
-    return _run_source(ap, args, args.file, text, explicit)
+    return _run_source(ap, args, args.file, text, explicit, script_args)
 
 
 # ----------------------------------------------------------------入口
@@ -1220,6 +1227,8 @@ def _build_parser():
 
     p = sub.add_parser('run', help='执行 .hb 脚本（单进程跑完，共用一次连接）', parents=[common])
     p.add_argument('file', help='脚本路径；- 表示从 stdin 读')
+    p.add_argument('script_args', nargs='*',
+                   help='传给脚本的参数 → 脚本里用 ${1}/${2}…、${argc}、${argv} 取用')
     # 与主命令同名选项：子命令层用 SUPPRESS，避免覆盖放在 run 之前的 -c/--echo
     p.add_argument('-c', '--continue', dest='keep_going', action='store_true',
                    default=argparse.SUPPRESS,

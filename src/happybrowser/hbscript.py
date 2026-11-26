@@ -229,7 +229,8 @@ def value_of(text, quoted, variables, strict=False):
 
     - 引号包裹 → 字符串（${} 插值后一定是 str）
     - 整体是 ${name} → 变量值（保留类型；未定义则原样保留字符串）
-    - 裸标识符 → 已定义变量的值；未定义：strict 报错，否则当字符串字面值
+    - 裸标识符 → 已定义变量的值；true/false 是布尔字面量（同名变量优先）；
+      其余未定义：strict 报错，否则当字符串字面值
     - 数字 → int / float
     - 其他裸词（含 : / . # @ 等，不可能是变量名）→ 字符串
     """
@@ -241,6 +242,12 @@ def value_of(text, quoted, variables, strict=False):
     if text.isidentifier():
         if text in variables:
             return variables[text]
+        # 布尔字面量 true/false（变量同名时以上面的变量优先，向后兼容）
+        low = text.lower()
+        if low == 'true':
+            return True
+        if low == 'false':
+            return False
         if strict:
             raise ScriptError(f'变量未定义：{text}（字面字符串请加引号："{text}"）')
         return text
